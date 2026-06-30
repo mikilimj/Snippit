@@ -466,7 +466,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "clipsnip-scaffold"
+name = "clipsnip"
 version = "0.1.0"
 dependencies = [
  "serde",
