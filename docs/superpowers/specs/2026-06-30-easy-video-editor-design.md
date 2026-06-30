@@ -1,4 +1,4 @@
-# Easy Video Editor — Design Spec
+# ClipSnip — Design Spec
 
 **Date:** 2026-06-30
 **Status:** Approved design, pre-implementation
