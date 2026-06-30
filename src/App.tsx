@@ -1,13 +1,35 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { probeClip, type ClipMeta } from "./api";
+import { setIn, setOut } from "./trim";
 import "./App.css";
 
 function App() {
   const [path, setPath] = useState<string | null>(null);
   const [meta, setMeta] = useState<ClipMeta | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [inPoint, setInPoint] = useState<number | null>(null);
+  const [outPoint, setOutPoint] = useState<number | null>(null);
+
+  function markIn() {
+    const t = videoRef.current?.currentTime ?? 0;
+    setInPoint(setIn(t, outPoint));
+  }
+  function markOut() {
+    const t = videoRef.current?.currentTime ?? 0;
+    setOutPoint(setOut(t, inPoint, meta?.durationSecs ?? t));
+  }
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "i" || e.key === "I") markIn();
+      if (e.key === "o" || e.key === "O") markOut();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [inPoint, outPoint, meta]);
 
   async function pickClip() {
     setError(null);
@@ -42,10 +64,18 @@ function App() {
       )}
       {path && (
         <video
+          ref={videoRef}
           src={convertFileSrc(path)}
           controls
           style={{ width: "100%", maxWidth: 720, background: "#000" }}
         />
+      )}
+      {path && (
+        <div data-testid="trim-controls">
+          <button onClick={markIn}>Set In (I)</button>
+          <button onClick={markOut}>Set Out (O)</button>
+          <span> In: {inPoint?.toFixed(2) ?? "—"} | Out: {outPoint?.toFixed(2) ?? "—"}</span>
+        </div>
       )}
     </main>
   );
