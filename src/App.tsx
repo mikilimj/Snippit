@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { probeClip, type ClipMeta } from "./api";
+import { probeClip, exportTrim, type ClipMeta } from "./api";
 import { setIn, setOut } from "./trim";
 import "./App.css";
 
@@ -12,6 +12,7 @@ function App() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [inPoint, setInPoint] = useState<number | null>(null);
   const [outPoint, setOutPoint] = useState<number | null>(null);
+  const [status, setStatus] = useState<string | null>(null);
 
   function markIn() {
     const t = videoRef.current?.currentTime ?? 0;
@@ -30,6 +31,22 @@ function App() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [inPoint, outPoint, meta]);
+
+  async function doExport() {
+    if (!path || inPoint === null || outPoint === null) {
+      setStatus("Set In and Out first.");
+      return;
+    }
+    const dest = await save({ defaultPath: "clip-trimmed.mp4" });
+    if (!dest) return;
+    setStatus("Exporting…");
+    try {
+      const out = await exportTrim(path, inPoint, outPoint, dest);
+      setStatus(`Exported: ${out}`);
+    } catch (e) {
+      setStatus(`Export failed: ${e}`);
+    }
+  }
 
   async function pickClip() {
     setError(null);
@@ -75,6 +92,8 @@ function App() {
           <button onClick={markIn}>Set In (I)</button>
           <button onClick={markOut}>Set Out (O)</button>
           <span> In: {inPoint?.toFixed(2) ?? "—"} | Out: {outPoint?.toFixed(2) ?? "—"}</span>
+          <button onClick={doExport}>Export trim</button>
+          {status && <p data-testid="export-status">{status}</p>}
         </div>
       )}
     </main>
