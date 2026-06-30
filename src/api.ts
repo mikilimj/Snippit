@@ -19,3 +19,12 @@ export interface ClipMeta {
 export function probeClip(path: string): Promise<ClipMeta> {
   return invoke<ClipMeta>("probe_clip", { path });
 }
+
+export function exportTrim(
+  source: string,
+  inSecs: number,
+  outSecs: number,
+  output: string
+): Promise<string> {
+  return invoke<string>("export_trim", { source, inSecs, outSecs, output });
+}
