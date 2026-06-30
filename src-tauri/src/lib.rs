@@ -1,7 +1,7 @@
 mod probe;
 pub mod export;
 
-use export::build_trim_copy_args;
+use export::{build_trim_copy_args, validate_trim};
 use probe::{parse_ffprobe_json, ClipMeta};
 use tauri_plugin_shell::ShellExt;
 
@@ -12,7 +12,7 @@ async fn probe_clip(app: tauri::AppHandle, path: String) -> Result<ClipMeta, Str
         .sidecar("ffprobe")
         .map_err(|e| e.to_string())?
         .args([
-            "-v", "quiet",
+            "-v", "error",
             "-print_format", "json",
             "-show_format",
             "-show_streams",
@@ -35,6 +35,7 @@ async fn export_trim(
     out_secs: f64,
     output: String,
 ) -> Result<String, String> {
+    validate_trim(&source, &output, in_secs, out_secs)?;
     let args = build_trim_copy_args(&source, in_secs, out_secs, &output);
     let result = app
         .shell()

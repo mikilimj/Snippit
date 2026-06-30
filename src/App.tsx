@@ -56,6 +56,9 @@ function App() {
     });
     if (typeof selected !== "string") return;
     setPath(selected);
+    setInPoint(null);
+    setOutPoint(null);
+    setStatus(null);
     try {
       setMeta(await probeClip(selected));
     } catch (e) {
