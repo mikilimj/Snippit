@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import { probeClip, type ClipMeta } from "./api";
 import "./App.css";
 
@@ -38,6 +39,13 @@ function App() {
           <li>Video codec: {meta.videoCodec}</li>
           <li>Audio tracks: {meta.audioTracks.length}</li>
         </ul>
+      )}
+      {path && (
+        <video
+          src={convertFileSrc(path)}
+          controls
+          style={{ width: "100%", maxWidth: 720, background: "#000" }}
+        />
       )}
     </main>
   );
