@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    clipsnip_scaffold_lib::run()
+    clipsnip_lib::run()
 }
