@@ -28,3 +28,6 @@ dist-ssr
 
 # Brainstorming visual-companion session files (ephemeral mockups/state)
 .superpowers/brainstorm/
+
+# Local git worktrees for isolated feature work
+.worktrees/
