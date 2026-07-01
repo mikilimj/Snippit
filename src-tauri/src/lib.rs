@@ -1,5 +1,6 @@
 mod probe;
 pub mod export;
+pub mod setup;
 mod media_server;
 
 use export::{build_trim_args, validate_trim, TrackConfig};
