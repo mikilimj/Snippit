@@ -1,0 +1,135 @@
+.wiz-stage {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #06060a;
+  overflow: hidden;
+}
+
+.wiz-blob {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(45px);
+}
+
+.wiz-blob-1 { width: 280px; height: 280px; background: #312e81; opacity: .5; top: -70px; left: -50px; animation: wizFloatA 10s ease-in-out infinite; }
+.wiz-blob-2 { width: 250px; height: 250px; background: #164e63; opacity: .45; bottom: -70px; right: -40px; animation: wizFloatB 12s ease-in-out infinite; }
+.wiz-blob-3 { width: 200px; height: 200px; background: #4a044e; opacity: .4; top: 60px; right: 40px; animation: wizFloatC 8s ease-in-out infinite; }
+
+@keyframes wizFloatA { 0%, 100% { transform: translate(0, 0); } 50% { transform: translate(40px, 30px); } }
+@keyframes wizFloatB { 0%, 100% { transform: translate(0, 0); } 50% { transform: translate(-30px, -20px); } }
+@keyframes wizFloatC { 0%, 100% { transform: translate(0, 0); } 50% { transform: translate(-20px, 40px); } }
+
+.wiz-panel {
+  position: relative;
+  z-index: 2;
+  width: 420px;
+  max-width: calc(100vw - 40px);
+  padding: 32px 30px;
+  border-radius: 16px;
+  background: rgba(15, 15, 22, .55);
+  backdrop-filter: blur(18px);
+  border: 1px solid rgba(255, 255, 255, .08);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, .5);
+  color: #fff;
+}
+
+.wiz-dots { display: flex; gap: 8px; justify-content: center; margin-bottom: 22px; }
+.wiz-dot { width: 7px; height: 7px; border-radius: 50%; background: rgba(255, 255, 255, .25); }
+.wiz-dot.active { background: #a78bfa; width: 20px; border-radius: 4px; }
+
+.wiz-title { font-size: 19px; font-weight: 600; margin-bottom: 8px; text-align: center; }
+.wiz-desc { font-size: 13px; color: rgba(255, 255, 255, .65); text-align: center; margin-bottom: 22px; line-height: 1.5; }
+
+.wiz-pickbox {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, .06);
+  border: 1px solid rgba(255, 255, 255, .1);
+  margin-bottom: 14px;
+}
+
+.wiz-path {
+  flex: 1;
+  font-size: 12px;
+  color: rgba(255, 255, 255, .55);
+  font-family: monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wiz-btn-choose {
+  padding: 7px 14px;
+  border-radius: 8px;
+  background: rgba(167, 139, 250, .18);
+  color: #c4b5fd;
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid rgba(167, 139, 250, .3);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.wiz-btn-choose:hover { background: rgba(167, 139, 250, .28); }
+
+.wiz-warning {
+  font-size: 12px;
+  color: #ddaa44;
+  background: rgba(90, 64, 0, .25);
+  border: 1px solid rgba(90, 64, 0, .5);
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin-bottom: 18px;
+  line-height: 1.5;
+}
+.wiz-warning.wiz-error { color: #ff8080; background: rgba(90, 20, 20, .25); border-color: rgba(90, 20, 20, .5); }
+
+.wiz-modes { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
+
+.wiz-mode-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, .04);
+  border: 1px solid rgba(255, 255, 255, .08);
+  cursor: pointer;
+}
+.wiz-mode-option.selected { border-color: #a78bfa; background: rgba(167, 139, 250, .12); }
+.wiz-mode-option input[type="radio"] { margin-top: 3px; accent-color: #a78bfa; }
+.wiz-mode-title { font-size: 13px; font-weight: 600; color: #fff; }
+.wiz-mode-desc { font-size: 11px; color: rgba(255, 255, 255, .55); margin-top: 2px; }
+
+.wiz-nav { display: flex; justify-content: space-between; align-items: center; }
+.wiz-nav-single { justify-content: center; }
+
+.wiz-back {
+  font-size: 13px;
+  color: rgba(255, 255, 255, .5);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 6px 4px;
+}
+.wiz-back:hover { color: rgba(255, 255, 255, .8); }
+.wiz-back:disabled { opacity: .4; cursor: default; }
+
+.wiz-next {
+  padding: 10px 22px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #8b5cf6, #6366f1);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  border: none;
+  box-shadow: 0 8px 20px rgba(99, 102, 241, .35);
+  cursor: pointer;
+}
+.wiz-next:hover { filter: brightness(1.08); }
+.wiz-next:disabled { opacity: .4; cursor: default; filter: none; box-shadow: none; }
