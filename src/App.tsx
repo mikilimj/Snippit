@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { probeClip, exportTrim, prepareAudioTracks, type ClipMeta, type TrackConfig } from "./api";
+import { probeClip, exportTrim, prepareAudioTracks, getAppRoot, type ClipMeta, type TrackConfig, type SetupResult } from "./api";
 import { setIn, setOut } from "./trim";
 import { Timeline } from "./Timeline";
+import { FirstRunWizard } from "./FirstRunWizard";
 import "./App.css";
 
 interface LibraryEntry {
@@ -27,6 +28,8 @@ function App() {
   const [currentTime, setCurrentTime] = useState(0);
   const [library, setLibrary] = useState<LibraryEntry[]>([]);
   const [mediaPort, setMediaPort] = useState<number | null>(null);
+  // `undefined` = still checking, `null` = needs first-run setup, string = configured root
+  const [appRoot, setAppRoot] = useState<string | null | undefined>(undefined);
 
   // ── Multi-track audio state ──────────────────────────────────────────────────
   const [trackConfigs, setTrackConfigs] = useState<TrackConfig[]>([]);
@@ -47,6 +50,12 @@ function App() {
 
   useEffect(() => {
     invoke<number>("get_media_port").then(setMediaPort);
+  }, []);
+
+  useEffect(() => {
+    getAppRoot()
+      .then(setAppRoot)
+      .catch(() => setAppRoot(null));
   }, []);
 
   // Force-mute the native <video> element's own audio the moment Web Audio
@@ -193,6 +202,13 @@ function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [inPoint, outPoint, meta]);
 
+  function handleSetupComplete(result: SetupResult) {
+    setAppRoot(result.rootPath);
+    if (result.warnings.length > 0) {
+      setStatus(`Setup finished with warnings: ${result.warnings.join("; ")}`);
+    }
+  }
+
   // ── Export ────────────────────────────────────────────────────────────────────
   async function doExport() {
     if (!path || inPoint === null || outPoint === null) {
@@ -271,6 +287,14 @@ function App() {
   }
 
   // ── Render ────────────────────────────────────────────────────────────────────
+  if (appRoot === undefined) {
+    return null;
+  }
+
+  if (appRoot === null) {
+    return <FirstRunWizard onComplete={handleSetupComplete} />;
+  }
+
   return (
     <div className="app-layout">
       {/* Library sidebar */}
