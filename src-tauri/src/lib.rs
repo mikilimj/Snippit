@@ -216,6 +216,67 @@ fn remove_from_library(app: tauri::AppHandle, id: i64) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn set_clip_favorite(app: tauri::AppHandle, id: i64, favorite: bool) -> Result<(), String> {
+    let conn = open_library(&app)?;
+    library::set_favorite(&conn, id, favorite)
+}
+
+#[tauri::command]
+fn rename_library_clip(app: tauri::AppHandle, id: i64, name: String) -> Result<(), String> {
+    let conn = open_library(&app)?;
+    library::rename_clip(&conn, id, &name)
+}
+
+#[tauri::command]
+fn create_folder(app: tauri::AppHandle, name: String) -> Result<library::Folder, String> {
+    let conn = open_library(&app)?;
+    library::create_folder(&conn, &name)
+}
+
+#[tauri::command]
+fn list_folders(app: tauri::AppHandle) -> Result<Vec<library::Folder>, String> {
+    let conn = open_library(&app)?;
+    library::list_folders(&conn)
+}
+
+#[tauri::command]
+fn delete_folder(app: tauri::AppHandle, folder_id: i64) -> Result<(), String> {
+    let conn = open_library(&app)?;
+    library::delete_folder(&conn, folder_id)
+}
+
+#[tauri::command]
+fn add_clip_to_folder(app: tauri::AppHandle, clip_id: i64, folder_id: i64) -> Result<(), String> {
+    let conn = open_library(&app)?;
+    library::add_clip_to_folder(&conn, clip_id, folder_id)
+}
+
+#[tauri::command]
+fn remove_clip_from_folder(
+    app: tauri::AppHandle,
+    clip_id: i64,
+    folder_id: i64,
+) -> Result<(), String> {
+    let conn = open_library(&app)?;
+    library::remove_clip_from_folder(&conn, clip_id, folder_id)
+}
+
+#[tauri::command]
+fn list_clips_in_folder(
+    app: tauri::AppHandle,
+    folder_id: i64,
+) -> Result<Vec<library::ClipRow>, String> {
+    let conn = open_library(&app)?;
+    library::list_clips_in_folder(&conn, folder_id)
+}
+
+#[tauri::command]
+fn list_unsorted_library(app: tauri::AppHandle) -> Result<Vec<library::ClipRow>, String> {
+    let conn = open_library(&app)?;
+    library::list_unsorted_clips(&conn)
+}
+
+#[tauri::command]
 fn get_app_root(app: tauri::AppHandle) -> Result<Option<String>, String> {
     let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
     Ok(setup::read_pointer_file(&config_dir))
@@ -496,7 +557,16 @@ pub fn run() {
             add_to_library,
             list_library,
             remove_from_library,
-            rescan_library
+            rescan_library,
+            set_clip_favorite,
+            rename_library_clip,
+            create_folder,
+            list_folders,
+            delete_folder,
+            add_clip_to_folder,
+            remove_clip_from_folder,
+            list_clips_in_folder,
+            list_unsorted_library
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

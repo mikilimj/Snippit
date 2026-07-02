@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { probeClip, exportTrim, exportCompressed, prepareAudioTracks, getAppRoot, addToLibrary, listLibrary, removeFromLibrary, rescanLibrary, type ClipMeta, type ClipRow, type TrackConfig, type SetupResult } from "./api";
+import { probeClip, exportTrim, exportCompressed, prepareAudioTracks, getAppRoot, addToLibrary, listLibrary, removeFromLibrary, rescanLibrary, setClipFavorite, renameLibraryClip, createFolder, listFolders, deleteFolder, addClipToFolder, removeClipFromFolder, listClipsInFolder, listUnsortedLibrary, type ClipMeta, type ClipRow, type Folder, type TrackConfig, type SetupResult } from "./api";
+import { newClipBelongsInView, applyFavorite, applyRename, type LibraryView } from "./libraryView";
 import { isCustomSelectionValid, resolveTargetMb, TARGET_SIZE_PRESETS } from "./exportOptions";
 import { setIn, setOut } from "./trim";
 import { Timeline } from "./Timeline";
@@ -25,6 +26,12 @@ function App() {
   const [status, setStatus] = useState<string | null>(null);
   const [currentTime, setCurrentTime] = useState(0);
   const [library, setLibrary] = useState<ClipRow[]>([]);
+  const [folders, setFolders] = useState<Folder[]>([]);
+  const [activeView, setActiveView] = useState<LibraryView>({ kind: "all" });
+  const [creatingFolder, setCreatingFolder] = useState(false);
+  const [newFolderName, setNewFolderName] = useState("");
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editingName, setEditingName] = useState("");
   const [mediaPort, setMediaPort] = useState<number | null>(null);
   const [sizeSelection, setSizeSelection] = useState("original");
   const [customMb, setCustomMb] = useState("");
@@ -42,6 +49,8 @@ function App() {
   const audioCtxRef = useRef<AudioContext | null>(null);
   const audioElsRef = useRef<HTMLAudioElement[]>([]);
   const gainNodesRef = useRef<GainNode[]>([]);
+  // Set when the user hits Escape so the imminent blur cancels instead of commits.
+  const renameCancelRef = useRef(false);
 
   // Keep the ref in sync so Web Audio effects can read current config
   useEffect(() => {
@@ -58,26 +67,61 @@ function App() {
       .catch(() => setAppRoot(null));
   }, []);
 
-  // Load the persisted library index once setup is configured.
+  // Fetch the clips for the given filter view from the backend. Each view maps
+  // to a dedicated query so folder/unsorted membership stays server-authoritative.
+  async function loadView(view: LibraryView) {
+    try {
+      let rows: ClipRow[];
+      switch (view.kind) {
+        case "all":
+          rows = await listLibrary();
+          break;
+        case "favorites":
+          rows = (await listLibrary()).filter(c => c.favorite);
+          break;
+        case "unsorted":
+          rows = await listUnsortedLibrary();
+          break;
+        case "folder":
+          rows = await listClipsInFolder(view.id);
+          break;
+      }
+      setLibrary(rows);
+    } catch (err) {
+      console.error("Failed to load library view:", err);
+    }
+  }
+
+  // Load the clips for the active view once setup is configured, and whenever
+  // the user switches views.
   useEffect(() => {
     if (typeof appRoot !== "string") return;
-    listLibrary()
-      .then(setLibrary)
-      .catch(err => console.error("Failed to load library:", err));
+    loadView(activeView);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [appRoot, activeView]);
+
+  // Load the virtual folders once setup is configured.
+  useEffect(() => {
+    if (typeof appRoot !== "string") return;
+    listFolders()
+      .then(setFolders)
+      .catch(err => console.error("Failed to load folders:", err));
   }, [appRoot]);
 
   // Auto-import: the Rust watcher emits `clip-added` for each new/updated clip
-  // it ingests from the watched folders. Merge it in (newest first, de-duped).
+  // it ingests. A fresh clip is unsorted and not a favorite, so only merge it
+  // into views where it belongs (All / Unsorted); other views ignore it.
   useEffect(() => {
     if (typeof appRoot !== "string") return;
     const unlisten = listen<ClipRow>("clip-added", e => {
+      if (!newClipBelongsInView(activeView)) return;
       const row = e.payload;
       setLibrary(prev => [row, ...prev.filter(x => x.path !== row.path)]);
     });
     return () => {
       unlisten.then(f => f());
     };
-  }, [appRoot]);
+  }, [appRoot, activeView]);
 
   // Force-mute the native <video> element's own audio the moment Web Audio
   // takes over. React's `muted` prop only sets the attribute; on an
@@ -278,13 +322,16 @@ function App() {
       const m = await probeClip(p);
       setMeta(m);
       // Persist to the library index; fall back to an in-session row if the
-      // write fails so the clip still shows in the sidebar.
+      // write fails so the clip still shows in the sidebar. A just-opened clip
+      // is unsorted, so it only appears in views that show new clips.
       addToLibrary(p, m)
-        .then(row =>
-          setLibrary(prev => [row, ...prev.filter(e => e.path !== p)])
-        )
+        .then(row => {
+          if (!newClipBelongsInView(activeView)) return;
+          setLibrary(prev => [row, ...prev.filter(e => e.path !== p)]);
+        })
         .catch(err => {
           console.error("Failed to add clip to library:", err);
+          if (!newClipBelongsInView(activeView)) return;
           setLibrary(prev =>
             prev.some(e => e.path === p)
               ? prev
@@ -358,6 +405,110 @@ function App() {
     }
   }
 
+  // ── Favorites, rename, folders ────────────────────────────────────────────────
+  async function toggleFavorite(e: React.MouseEvent, entry: ClipRow) {
+    e.stopPropagation();
+    const favorite = !entry.favorite;
+    setLibrary(prev => applyFavorite(prev, entry.id, favorite, activeView));
+    if (entry.id < 0) return; // in-session-only fallback row, nothing to persist
+    try {
+      await setClipFavorite(entry.id, favorite);
+    } catch (err) {
+      console.error("Failed to set favorite:", err);
+      loadView(activeView); // reconcile with the source of truth
+    }
+  }
+
+  function startRename(e: React.MouseEvent, entry: ClipRow) {
+    e.stopPropagation();
+    renameCancelRef.current = false;
+    setEditingId(entry.id);
+    setEditingName(entry.displayName);
+  }
+
+  async function commitRename() {
+    if (renameCancelRef.current) {
+      renameCancelRef.current = false;
+      return; // Escape was pressed — discard the edit.
+    }
+    const id = editingId;
+    if (id === null) return;
+    const name = editingName.trim();
+    setEditingId(null);
+    if (!name) return;
+    setLibrary(prev => applyRename(prev, id, name));
+    if (id < 0) return;
+    try {
+      await renameLibraryClip(id, name);
+    } catch (err) {
+      console.error("Failed to rename clip:", err);
+      loadView(activeView);
+    }
+  }
+
+  async function addToFolder(clipId: number, folderId: number) {
+    try {
+      await addClipToFolder(clipId, folderId);
+      // In the Unsorted view the clip has just left this filter.
+      if (activeView.kind === "unsorted") {
+        setLibrary(prev => prev.filter(c => c.id !== clipId));
+      }
+    } catch (err) {
+      console.error("Failed to add clip to folder:", err);
+    }
+  }
+
+  async function removeFromCurrentFolder(e: React.MouseEvent, clipId: number) {
+    e.stopPropagation();
+    if (activeView.kind !== "folder") return;
+    const folderId = activeView.id;
+    setLibrary(prev => prev.filter(c => c.id !== clipId));
+    try {
+      await removeClipFromFolder(clipId, folderId);
+    } catch (err) {
+      console.error("Failed to remove clip from folder:", err);
+      loadView(activeView);
+    }
+  }
+
+  function cancelFolderCreation() {
+    setCreatingFolder(false);
+    setNewFolderName("");
+  }
+
+  // Only ever invoked from the Enter key, so there is no blur/Enter double-fire
+  // (a second create attempt would trip the unique-name constraint).
+  async function createFolderClick() {
+    const name = newFolderName.trim();
+    if (!name) {
+      cancelFolderCreation();
+      return;
+    }
+    try {
+      const folder = await createFolder(name);
+      setFolders(prev => [...prev, folder].sort((a, b) => a.name.localeCompare(b.name)));
+      setNewFolderName("");
+      setCreatingFolder(false);
+      setActiveView({ kind: "folder", id: folder.id });
+    } catch (err) {
+      console.error("Failed to create folder:", err);
+      setStatus(`Couldn't create folder: ${err}`);
+    }
+  }
+
+  async function deleteFolderClick(e: React.MouseEvent, folder: Folder) {
+    e.stopPropagation();
+    try {
+      await deleteFolder(folder.id);
+      setFolders(prev => prev.filter(f => f.id !== folder.id));
+      setActiveView(prev =>
+        prev.kind === "folder" && prev.id === folder.id ? { kind: "all" } : prev
+      );
+    } catch (err) {
+      console.error("Failed to delete folder:", err);
+    }
+  }
+
   // ── Render ────────────────────────────────────────────────────────────────────
   if (appRoot === undefined) {
     return null;
@@ -388,8 +539,77 @@ function App() {
             <button className="btn-sm" onClick={pickClip}>+ Open</button>
           </div>
         </div>
+        <nav className="folder-rail">
+          <button
+            className={`folder-chip${activeView.kind === "all" ? " active" : ""}`}
+            onClick={() => setActiveView({ kind: "all" })}
+          >
+            All
+          </button>
+          <button
+            className={`folder-chip${activeView.kind === "favorites" ? " active" : ""}`}
+            onClick={() => setActiveView({ kind: "favorites" })}
+          >
+            ★ Favorites
+          </button>
+          <button
+            className={`folder-chip${activeView.kind === "unsorted" ? " active" : ""}`}
+            onClick={() => setActiveView({ kind: "unsorted" })}
+          >
+            Unsorted
+          </button>
+          {folders.map(f => (
+            <span
+              key={f.id}
+              className={`folder-chip folder-chip-user${
+                activeView.kind === "folder" && activeView.id === f.id ? " active" : ""
+              }`}
+            >
+              <button
+                className="folder-chip-label"
+                onClick={() => setActiveView({ kind: "folder", id: f.id })}
+              >
+                {f.name}
+              </button>
+              <button
+                className="folder-chip-delete"
+                title="Delete folder (keeps the clips)"
+                aria-label="Delete folder"
+                onClick={e => deleteFolderClick(e, f)}
+              >
+                ×
+              </button>
+            </span>
+          ))}
+          {creatingFolder ? (
+            <input
+              className="folder-new-input"
+              autoFocus
+              value={newFolderName}
+              placeholder="Folder name"
+              onChange={e => setNewFolderName(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === "Enter") createFolderClick();
+                if (e.key === "Escape") cancelFolderCreation();
+              }}
+              onBlur={cancelFolderCreation}
+            />
+          ) : (
+            <button className="folder-chip folder-new" onClick={() => setCreatingFolder(true)}>
+              + Folder
+            </button>
+          )}
+        </nav>
         {library.length === 0 ? (
-          <p className="library-empty">Open a clip to add it here.</p>
+          <p className="library-empty">
+            {activeView.kind === "all"
+              ? "Open a clip to add it here."
+              : activeView.kind === "favorites"
+                ? "No favorites yet — tap ☆ on a clip."
+                : activeView.kind === "unsorted"
+                  ? "Nothing unsorted — every clip is filed away."
+                  : "No clips in this folder yet."}
+          </p>
         ) : (
           <ul className="library-list">
             {library.map(entry => (
@@ -410,19 +630,84 @@ function App() {
                   <div className="library-thumb library-thumb-empty" />
                 )}
                 <div className="library-item-text">
-                  <span className="library-name">{entry.displayName}</span>
+                  {editingId === entry.id ? (
+                    <input
+                      className="library-rename-input"
+                      autoFocus
+                      value={editingName}
+                      onClick={e => e.stopPropagation()}
+                      onChange={e => setEditingName(e.target.value)}
+                      onKeyDown={e => {
+                        if (e.key === "Enter") commitRename();
+                        if (e.key === "Escape") {
+                          renameCancelRef.current = true;
+                          setEditingId(null);
+                        }
+                      }}
+                      onBlur={commitRename}
+                    />
+                  ) : (
+                    <span
+                      className="library-name"
+                      title="Double-click to rename"
+                      onDoubleClick={e => startRename(e, entry)}
+                    >
+                      {entry.displayName}
+                    </span>
+                  )}
                   <span className="library-meta">
                     {entry.durationSecs.toFixed(1)}s · {entry.width}×{entry.height}
                   </span>
                 </div>
-                <button
-                  className="library-remove"
-                  title="Remove from library (keeps the file)"
-                  aria-label="Remove from library"
-                  onClick={e => removeFromLibraryClick(e, entry)}
-                >
-                  ×
-                </button>
+                <div className="library-actions">
+                  <button
+                    className={`library-fav${entry.favorite ? " on" : ""}`}
+                    title={entry.favorite ? "Unfavorite" : "Mark as favorite"}
+                    aria-label={entry.favorite ? "Unfavorite" : "Mark as favorite"}
+                    onClick={e => toggleFavorite(e, entry)}
+                  >
+                    {entry.favorite ? "★" : "☆"}
+                  </button>
+                  {folders.length > 0 && (
+                    <select
+                      className="library-folder-select"
+                      title="Add to folder"
+                      value=""
+                      onClick={e => e.stopPropagation()}
+                      onChange={e => {
+                        const fid = Number(e.target.value);
+                        if (fid) addToFolder(entry.id, fid);
+                        e.target.value = "";
+                      }}
+                    >
+                      <option value="">＋Folder</option>
+                      {folders.map(f => (
+                        <option key={f.id} value={f.id}>
+                          {f.name}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                  {activeView.kind === "folder" ? (
+                    <button
+                      className="library-remove"
+                      title="Remove from this folder"
+                      aria-label="Remove from this folder"
+                      onClick={e => removeFromCurrentFolder(e, entry.id)}
+                    >
+                      −
+                    </button>
+                  ) : (
+                    <button
+                      className="library-remove"
+                      title="Remove from library (keeps the file)"
+                      aria-label="Remove from library"
+                      onClick={e => removeFromLibraryClick(e, entry)}
+                    >
+                      ×
+                    </button>
+                  )}
+                </div>
               </li>
             ))}
           </ul>
