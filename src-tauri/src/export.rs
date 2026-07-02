@@ -96,6 +96,98 @@ pub fn build_trim_copy_args(input: &str, in_secs: f64, out_secs: f64, output: &s
     build_trim_args(input, in_secs, out_secs, output, &[])
 }
 
+/// Build ffmpeg args for a **Compatible MP4** trim export (spec §4.5): the video
+/// is always re-encoded to H.264 (and audio to AAC) for universal playback and
+/// frame-accurate cut points, rather than stream-copied at keyframes. Audio track
+/// mapping/mixing follows the same rules as `build_trim_args`.
+pub fn build_trim_compatible_args(
+    input: &str,
+    in_secs: f64,
+    out_secs: f64,
+    output: &str,
+    tracks: &[TrackConfig],
+) -> Vec<String> {
+    let duration = out_secs - in_secs;
+    let mut args = vec![
+        "-y".to_string(),
+        "-ss".to_string(),
+        format!("{:.3}", in_secs),
+        "-i".to_string(),
+        input.to_string(),
+        "-t".to_string(),
+        format!("{:.3}", duration),
+    ];
+
+    let enabled: Vec<&TrackConfig> = tracks.iter().filter(|t| t.enabled).collect();
+    let needs_mix =
+        enabled.len() > 1 || (enabled.len() == 1 && (enabled[0].volume - 1.0).abs() >= 0.001);
+
+    if needs_mix {
+        args.extend([
+            "-filter_complex".to_string(),
+            amix_filter(&enabled),
+            "-map".to_string(),
+            "0:v:0".to_string(),
+            "-map".to_string(),
+            "[aout]".to_string(),
+        ]);
+    } else if enabled.len() == 1 {
+        args.extend([
+            "-map".to_string(),
+            "0:v:0".to_string(),
+            "-map".to_string(),
+            format!("0:{}", enabled[0].stream_index),
+        ]);
+    } else if !tracks.is_empty() {
+        // Tracks configured but all muted → video only.
+        args.extend(["-map".to_string(), "0:v:0".to_string()]);
+    }
+    // (empty `tracks` = no audio config → let ffmpeg map defaults)
+
+    args.extend([
+        "-c:v".to_string(),
+        "libx264".to_string(),
+        "-preset".to_string(),
+        "veryfast".to_string(),
+        "-crf".to_string(),
+        "20".to_string(),
+    ]);
+
+    let audio_silenced = !tracks.is_empty() && enabled.is_empty();
+    if audio_silenced {
+        args.push("-an".to_string());
+    } else {
+        args.extend([
+            "-c:a".to_string(),
+            "aac".to_string(),
+            "-b:a".to_string(),
+            "192k".to_string(),
+        ]);
+    }
+
+    args.extend([
+        "-movflags".to_string(),
+        "+faststart".to_string(),
+        output.to_string(),
+    ]);
+    args
+}
+
+/// Parses one ffmpeg `-progress` line into a 0.0–1.0 completion fraction against
+/// `total_secs`. `out_time_us` is microseconds; `progress=end` marks completion.
+/// Returns None for lines without a usable timestamp (e.g. `frame=…`, `N/A`).
+pub fn parse_progress_line(line: &str, total_secs: f64) -> Option<f64> {
+    let line = line.trim();
+    if line == "progress=end" {
+        return Some(1.0);
+    }
+    let micros: i64 = line.strip_prefix("out_time_us=")?.trim().parse().ok()?;
+    if total_secs <= 0.0 {
+        return Some(0.0);
+    }
+    Some(((micros as f64 / 1_000_000.0) / total_secs).clamp(0.0, 1.0))
+}
+
 pub fn validate_trim(source: &str, output: &str, in_secs: f64, out_secs: f64) -> Result<(), String> {
     if output == source {
         return Err("Output path must differ from the source file.".into());
@@ -440,5 +532,68 @@ mod tests {
             build_compress_pass_args("in.mp4", 0.0, 10.0, "out.mp4", &tracks, 900, 128, 2, "/tmp/log");
         assert!(args.contains(&"-an".to_string()));
         assert!(!args.contains(&"aac".to_string()));
+    }
+
+    // ── Compatible (re-encode) export mode ───────────────────────────────────────
+
+    #[test]
+    fn compatible_reencodes_video_to_h264_with_faststart() {
+        let tracks = vec![TrackConfig { stream_index: 1, enabled: true, volume: 1.0 }];
+        let args = build_trim_compatible_args("in.mkv", 1.0, 6.0, "out.mp4", &tracks);
+        // Even a single unity track must re-encode video for universal playback.
+        assert!(args.windows(2).any(|w| w[0] == "-c:v" && w[1] == "libx264"));
+        assert!(!args.windows(2).any(|w| w[0] == "-c:v" && w[1] == "copy"));
+        assert!(args.contains(&"aac".to_string())); // audio re-encoded too
+        assert!(args.windows(2).any(|w| w[0] == "-movflags" && w[1] == "+faststart"));
+        assert_eq!(args.last().unwrap(), "out.mp4");
+        // Trim window preserved.
+        let ss = args.iter().position(|a| a == "-ss").unwrap();
+        assert_eq!(args[ss + 1], "1.000");
+        assert!(args.windows(2).any(|w| w[0] == "-t" && w[1] == "5.000"));
+    }
+
+    #[test]
+    fn compatible_mixes_multiple_tracks() {
+        let tracks = vec![
+            TrackConfig { stream_index: 1, enabled: true, volume: 1.0 },
+            TrackConfig { stream_index: 2, enabled: true, volume: 0.5 },
+        ];
+        let args = build_trim_compatible_args("in.mp4", 0.0, 5.0, "out.mp4", &tracks);
+        let fc = args.iter().position(|a| a == "-filter_complex").unwrap();
+        assert!(args[fc + 1].contains("amix=inputs=2"));
+        assert!(args.contains(&"[aout]".to_string()));
+        assert!(args.windows(2).any(|w| w[0] == "-c:v" && w[1] == "libx264"));
+    }
+
+    #[test]
+    fn compatible_all_muted_drops_audio_but_still_reencodes_video() {
+        let tracks = vec![TrackConfig { stream_index: 1, enabled: false, volume: 1.0 }];
+        let args = build_trim_compatible_args("in.mp4", 0.0, 5.0, "out.mp4", &tracks);
+        assert!(args.contains(&"-an".to_string()));
+        assert!(!args.contains(&"aac".to_string()));
+        assert!(args.windows(2).any(|w| w[0] == "-c:v" && w[1] == "libx264"));
+    }
+
+    // ── FFmpeg -progress parsing ─────────────────────────────────────────────────
+
+    #[test]
+    fn progress_line_reports_fraction_of_duration() {
+        // Halfway through a 10s job.
+        let f = parse_progress_line("out_time_us=5000000", 10.0).unwrap();
+        assert!((f - 0.5).abs() < 1e-6, "got {f}");
+    }
+
+    #[test]
+    fn progress_end_marker_is_complete() {
+        assert_eq!(parse_progress_line("progress=end", 10.0), Some(1.0));
+    }
+
+    #[test]
+    fn progress_line_clamps_and_ignores_irrelevant_lines() {
+        // Overshoot (encoder can report slightly past duration) clamps to 1.0.
+        assert_eq!(parse_progress_line("out_time_us=11000000", 10.0), Some(1.0));
+        // Non-timestamp lines yield nothing.
+        assert_eq!(parse_progress_line("frame=42", 10.0), None);
+        assert_eq!(parse_progress_line("out_time_us=N/A", 10.0), None);
     }
 }

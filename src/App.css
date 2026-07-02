@@ -531,6 +531,45 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 }
 .btn-export:hover { filter: brightness(1.08); background: var(--grad-primary); }
 .btn-export:active { filter: brightness(0.95); }
+.btn-export:disabled { filter: grayscale(0.4) brightness(0.8); cursor: default; }
+
+.btn-cancel {
+  background: transparent;
+  border: 1px solid var(--out-color);
+  color: var(--out-color);
+  padding: 7px 14px;
+}
+.btn-cancel:hover { background: rgba(251, 113, 133, 0.12); border-color: var(--out-color); }
+
+/* ─── Export progress bar (spec §4.5) ───────────────────────────────────────── */
+.export-progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.export-progress-track {
+  flex: 1;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--panel-raised);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+.export-progress-fill {
+  height: 100%;
+  width: 100%;
+  background: var(--grad-primary);
+  border-radius: 3px;
+  transform-origin: left center;
+  transform: scaleX(0);
+  transition: transform 160ms ease;
+}
+.export-progress-label {
+  font-size: 11px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
 
 /* ─── Messages ──────────────────────────────────────────────────────────────── */
 .msg-error {

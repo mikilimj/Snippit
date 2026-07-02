@@ -6,8 +6,12 @@ pub mod media;
 pub mod watcher;
 mod media_server;
 
-use export::{build_compress_pass_args, build_trim_args, compute_target_bitrates, validate_trim, TrackConfig};
+use export::{
+    build_compress_pass_args, build_trim_args, build_trim_compatible_args, compute_target_bitrates,
+    parse_progress_line, validate_trim, TrackConfig,
+};
 use probe::{parse_ffprobe_json, ClipMeta};
+use serde::Serialize;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
@@ -15,6 +19,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::{Emitter, Manager};
+use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 
 struct MediaPort(u16);
@@ -100,6 +105,119 @@ async fn prepare_audio_tracks(
     Ok(results)
 }
 
+/// The single in-flight export job: the spawned ffmpeg child (so it can be
+/// killed) and a flag distinguishing a user cancel from a genuine failure. Only
+/// one export runs at a time.
+#[derive(Default)]
+struct ExportJob {
+    child: Mutex<Option<CommandChild>>,
+    cancelled: AtomicBool,
+}
+
+/// Progress event streamed to the UI while an export runs (spec §4.5).
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ExportProgress {
+    fraction: f64,
+    phase: String,
+}
+
+/// Outcome of one ffmpeg run under progress/cancel supervision.
+enum RunOutcome {
+    Done,
+    Cancelled,
+}
+
+/// Runs one ffmpeg invocation via the sidecar, parsing its `-progress` stream and
+/// emitting `export-progress` events scaled into `[base, base + span]` of the
+/// overall job. The spawned child is registered in `ExportJob` so `cancel_export`
+/// can kill it. Returns `Cancelled` if the user cancelled, `Err` on ffmpeg
+/// failure (with the tail of stderr).
+async fn run_ffmpeg_with_progress(
+    app: &tauri::AppHandle,
+    args: Vec<String>,
+    duration: f64,
+    phase: &str,
+    base: f64,
+    span: f64,
+) -> Result<RunOutcome, String> {
+    // `-progress pipe:1` streams key=value status to stdout; `-nostats` silences
+    // the noisy default stderr meter.
+    let mut full = vec![
+        "-progress".to_string(),
+        "pipe:1".to_string(),
+        "-nostats".to_string(),
+    ];
+    full.extend(args);
+
+    let (mut rx, child) = app
+        .shell()
+        .sidecar("ffmpeg")
+        .map_err(|e| e.to_string())?
+        .args(full)
+        .spawn()
+        .map_err(|e| e.to_string())?;
+
+    *app.state::<ExportJob>().child.lock().unwrap() = Some(child);
+
+    let mut success = false;
+    let mut stderr_tail = String::new();
+    while let Some(event) = rx.recv().await {
+        match event {
+            CommandEvent::Stdout(bytes) => {
+                let line = String::from_utf8_lossy(&bytes);
+                if let Some(frac) = parse_progress_line(&line, duration) {
+                    let _ = app.emit(
+                        "export-progress",
+                        ExportProgress {
+                            fraction: (base + span * frac).clamp(0.0, 1.0),
+                            phase: phase.to_string(),
+                        },
+                    );
+                }
+            }
+            CommandEvent::Stderr(bytes) => {
+                stderr_tail.push_str(&String::from_utf8_lossy(&bytes));
+                stderr_tail.push('\n');
+                // Keep only the tail — ffmpeg errors are at the end.
+                if stderr_tail.len() > 4000 {
+                    stderr_tail.drain(0..stderr_tail.len() - 4000);
+                }
+            }
+            CommandEvent::Terminated(payload) => success = payload.code == Some(0),
+            _ => {}
+        }
+    }
+
+    *app.state::<ExportJob>().child.lock().unwrap() = None;
+
+    if app.state::<ExportJob>().cancelled.load(Ordering::SeqCst) {
+        return Ok(RunOutcome::Cancelled);
+    }
+    if success {
+        Ok(RunOutcome::Done)
+    } else if stderr_tail.trim().is_empty() {
+        Err("ffmpeg exited with an error".to_string())
+    } else {
+        Err(stderr_tail.trim().to_string())
+    }
+}
+
+/// Cancels the running export (if any) by killing its ffmpeg child. The export
+/// command then resolves with a neutral "cancelled" result rather than an error.
+#[tauri::command]
+fn cancel_export(app: tauri::AppHandle) {
+    let job = app.state::<ExportJob>();
+    job.cancelled.store(true, Ordering::SeqCst);
+    let child = job.child.lock().unwrap().take();
+    if let Some(child) = child {
+        let _ = child.kill();
+    }
+}
+
+/// Trim export. `mode` selects **Fast** (stream-copy, near-instant, keyframe cut
+/// points) or **Compatible** (H.264/AAC re-encode for universal playback) per
+/// spec §4.5. Progress is streamed and the job is cancellable.
 #[tauri::command]
 async fn export_trim(
     app: tauri::AppHandle,
@@ -108,21 +226,24 @@ async fn export_trim(
     out_secs: f64,
     output: String,
     track_configs: Vec<TrackConfig>,
+    mode: String,
 ) -> Result<String, String> {
     validate_trim(&source, &output, in_secs, out_secs)?;
-    let args = build_trim_args(&source, in_secs, out_secs, &output, &track_configs);
-    let result = app
-        .shell()
-        .sidecar("ffmpeg")
-        .map_err(|e| e.to_string())?
-        .args(args)
-        .output()
-        .await
-        .map_err(|e| e.to_string())?;
-    if !result.status.success() {
-        return Err(String::from_utf8_lossy(&result.stderr).to_string());
+    app.state::<ExportJob>()
+        .cancelled
+        .store(false, Ordering::SeqCst);
+
+    let duration = out_secs - in_secs;
+    let args = if mode == "compatible" {
+        build_trim_compatible_args(&source, in_secs, out_secs, &output, &track_configs)
+    } else {
+        build_trim_args(&source, in_secs, out_secs, &output, &track_configs)
+    };
+
+    match run_ffmpeg_with_progress(&app, args, duration, "Exporting", 0.0, 1.0).await? {
+        RunOutcome::Done => Ok(output),
+        RunOutcome::Cancelled => Err("Export cancelled.".to_string()),
     }
-    Ok(output)
 }
 
 /// Two-pass H.264/AAC export that compresses the trimmed span to a target file
@@ -147,30 +268,24 @@ async fn export_compressed(
     let passlog = std::env::temp_dir().join(format!("clipsnip-2pass-{:x}", hasher.finish()));
     let passlog_str = passlog.to_string_lossy().to_string();
 
-    let mut run_error: Option<String> = None;
-    for pass in [1u8, 2u8] {
+    app.state::<ExportJob>()
+        .cancelled
+        .store(false, Ordering::SeqCst);
+    let duration = out_secs - in_secs;
+
+    // Two passes map onto the overall bar as [0, 0.5] (analyze) and [0.5, 1.0]
+    // (encode). Cancel/failure short-circuits, then the pass logs are cleaned up.
+    let mut outcome: Result<RunOutcome, String> = Ok(RunOutcome::Done);
+    for (idx, pass) in [1u8, 2u8].into_iter().enumerate() {
         let args = build_compress_pass_args(
             &source, in_secs, out_secs, &output, &track_configs,
             video_kbps, audio_kbps, pass, &passlog_str,
         );
-        let result = app
-            .shell()
-            .sidecar("ffmpeg")
-            .map_err(|e| e.to_string())?
-            .args(args)
-            .output()
-            .await
-            .map_err(|e| e.to_string());
-        match result {
-            Ok(r) if r.status.success() => {}
-            Ok(r) => {
-                run_error = Some(String::from_utf8_lossy(&r.stderr).to_string());
-                break;
-            }
-            Err(e) => {
-                run_error = Some(e);
-                break;
-            }
+        let phase = if pass == 1 { "Analyzing" } else { "Compressing" };
+        outcome = run_ffmpeg_with_progress(&app, args, duration, phase, idx as f64 * 0.5, 0.5).await;
+        match &outcome {
+            Ok(RunOutcome::Done) => {}
+            _ => break, // cancelled or errored
         }
     }
 
@@ -178,9 +293,9 @@ async fn export_compressed(
         let _ = std::fs::remove_file(format!("{passlog_str}{suffix}"));
     }
 
-    match run_error {
-        Some(e) => Err(e),
-        None => Ok(output),
+    match outcome? {
+        RunOutcome::Done => Ok(output),
+        RunOutcome::Cancelled => Err("Export cancelled.".to_string()),
     }
 }
 
@@ -576,6 +691,7 @@ pub fn run() {
             app.manage(MediaPort(port));
             app.manage(WatchStarted(AtomicBool::new(false)));
             app.manage(InFlight(Arc::new(Mutex::new(HashSet::new()))));
+            app.manage(ExportJob::default());
             // Start auto-import if already configured; a first-run launch starts
             // it from complete_setup instead.
             start_watching(app.handle());
@@ -585,6 +701,7 @@ pub fn run() {
             probe_clip,
             export_trim,
             export_compressed,
+            cancel_export,
             get_media_port,
             prepare_audio_tracks,
             get_app_root,

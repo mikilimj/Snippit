@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { probeClip, exportTrim, exportCompressed, prepareAudioTracks, getAppRoot, addToLibrary, listLibrary, removeFromLibrary, rescanLibrary, setClipFavorite, renameLibraryClip, createFolder, listFolders, deleteFolder, addClipToFolder, removeClipFromFolder, listClipsInFolder, listUnsortedLibrary, ensureProxy, type ClipMeta, type ClipRow, type Folder, type TrackConfig, type SetupResult } from "./api";
+import { probeClip, exportTrim, exportCompressed, cancelExport, prepareAudioTracks, getAppRoot, addToLibrary, listLibrary, removeFromLibrary, rescanLibrary, setClipFavorite, renameLibraryClip, createFolder, listFolders, deleteFolder, addClipToFolder, removeClipFromFolder, listClipsInFolder, listUnsortedLibrary, ensureProxy, type ClipMeta, type ClipRow, type ExportMode, type ExportProgress, type Folder, type TrackConfig, type SetupResult } from "./api";
 import { newClipBelongsInView, applyFavorite, applyRename, type LibraryView } from "./libraryView";
 import { previewPath, shouldTryProxy } from "./preview";
 import { isCustomSelectionValid, resolveTargetMb, TARGET_SIZE_PRESETS } from "./exportOptions";
@@ -39,6 +39,9 @@ function App() {
   const [mediaPort, setMediaPort] = useState<number | null>(null);
   const [sizeSelection, setSizeSelection] = useState("original");
   const [customMb, setCustomMb] = useState("");
+  const [exportMode, setExportMode] = useState<ExportMode>("fast");
+  const [exporting, setExporting] = useState(false);
+  const [progress, setProgress] = useState<ExportProgress | null>(null);
   // `undefined` = still checking, `null` = needs first-run setup, string = configured root
   const [appRoot, setAppRoot] = useState<string | null | undefined>(undefined);
 
@@ -63,6 +66,14 @@ function App() {
 
   useEffect(() => {
     invoke<number>("get_media_port").then(setMediaPort);
+  }, []);
+
+  // Live export progress streamed from the Rust engine (spec §4.5).
+  useEffect(() => {
+    const unlisten = listen<ExportProgress>("export-progress", e => setProgress(e.payload));
+    return () => {
+      unlisten.then(f => f());
+    };
   }, []);
 
   useEffect(() => {
@@ -315,17 +326,34 @@ function App() {
     const targetMb = resolveTargetMb(sizeSelection, customMb);
     const dest = await save({ defaultPath: "clip-trimmed.mp4" });
     if (!dest) return;
+    setExporting(true);
+    setProgress({ fraction: 0, phase: targetMb === null ? "Exporting" : "Analyzing" });
     setStatus(
-      targetMb === null ? "Exporting…" : `Compressing to ${targetMb} MB (two-pass encode)…`
+      targetMb === null
+        ? `Exporting (${exportMode === "fast" ? "Fast" : "Compatible"})…`
+        : `Compressing to ${targetMb} MB (two-pass encode)…`
     );
     try {
       const out =
         targetMb === null
-          ? await exportTrim(path, inPoint, outPoint, dest, trackConfigs)
+          ? await exportTrim(path, inPoint, outPoint, dest, trackConfigs, exportMode)
           : await exportCompressed(path, inPoint, outPoint, dest, trackConfigs, targetMb);
       setStatus(`Exported: ${out}`);
     } catch (e) {
-      setStatus(`Export failed: ${e}`);
+      const msg = String(e);
+      setStatus(/cancel/i.test(msg) ? "Export cancelled." : `Export failed: ${msg}`);
+    } finally {
+      setExporting(false);
+      setProgress(null);
+    }
+  }
+
+  async function cancelExportClick() {
+    setStatus("Cancelling…");
+    try {
+      await cancelExport();
+    } catch (e) {
+      console.error("Cancel failed:", e);
     }
   }
 
@@ -895,12 +923,51 @@ function App() {
                   className="export-size-custom"
                 />
               )}
-              <button className="btn-export" onClick={doExport}>Export trim</button>
+              {sizeSelection === "original" && (
+                <label className="export-size">
+                  <span className="export-size-label">Format</span>
+                  <select
+                    value={exportMode}
+                    onChange={e => setExportMode(e.target.value as ExportMode)}
+                    className="export-size-select"
+                    title="Fast = instant stream copy at keyframes; Compatible = H.264 re-encode for universal playback"
+                  >
+                    <option value="fast">Fast (lossless copy)</option>
+                    <option value="compatible">Compatible (H.264)</option>
+                  </select>
+                </label>
+              )}
+              <button className="btn-export" onClick={doExport} disabled={exporting}>
+                {exporting ? "Exporting…" : "Export trim"}
+              </button>
+              {exporting && (
+                <button className="btn-cancel" onClick={cancelExportClick}>Cancel</button>
+              )}
             </div>
+
+            {exporting && progress && (
+              <div className="export-progress" data-testid="export-progress">
+                <div className="export-progress-track">
+                  <div
+                    className="export-progress-fill"
+                    style={{ transform: `scaleX(${Math.max(0, Math.min(1, progress.fraction))})` }}
+                  />
+                </div>
+                <span className="export-progress-label">
+                  {progress.phase} · {Math.round(progress.fraction * 100)}%
+                </span>
+              </div>
+            )}
 
             {status && (
               <div
-                className={status.startsWith("Export failed") ? "msg-error" : "msg-ok"}
+                className={
+                  status.startsWith("Export failed")
+                    ? "msg-error"
+                    : /cancel/i.test(status)
+                      ? "msg-warn"
+                      : "msg-ok"
+                }
                 data-testid="export-status"
               >
                 {status}
