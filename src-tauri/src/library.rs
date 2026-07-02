@@ -28,6 +28,15 @@ pub struct ClipRow {
     pub added_at: i64,
 }
 
+/// A virtual folder: a user-named grouping of clips (spec §4.2). Folders never
+/// move files on disk — membership is a pure many-to-many index relation.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Folder {
+    pub id: i64,
+    pub name: String,
+}
+
 fn now_unix() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -65,6 +74,16 @@ pub fn init_db(conn: &Connection) -> Result<(), String> {
             favorite          INTEGER NOT NULL DEFAULT 0,
             missing           INTEGER NOT NULL DEFAULT 0,
             added_at          INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS folders (
+            id         INTEGER PRIMARY KEY,
+            name       TEXT NOT NULL UNIQUE,
+            created_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS clip_folders (
+            clip_id   INTEGER NOT NULL,
+            folder_id INTEGER NOT NULL,
+            PRIMARY KEY (clip_id, folder_id)
         );",
     )
     .map_err(|e| e.to_string())
@@ -153,8 +172,11 @@ pub fn list_clips(conn: &Connection) -> Result<Vec<ClipRow>, String> {
 }
 
 /// Removes a clip from the index only. The source file on disk is never touched
-/// (spec §4.2: removal is index-only by default).
+/// (spec §4.2: removal is index-only by default). Any folder memberships pointing
+/// at the clip are dropped too, so no orphaned `clip_folders` rows remain.
 pub fn remove_clip(conn: &Connection, id: i64) -> Result<(), String> {
+    conn.execute("DELETE FROM clip_folders WHERE clip_id = ?1", params![id])
+        .map_err(|e| e.to_string())?;
     conn.execute("DELETE FROM clips WHERE id = ?1", params![id])
         .map_err(|e| e.to_string())?;
     Ok(())
@@ -179,6 +201,112 @@ pub fn rename_clip(conn: &Connection, id: i64, display_name: &str) -> Result<(),
     )
     .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// Creates a new virtual folder and returns it. Fails if the name is already
+/// taken (folder names are unique).
+pub fn create_folder(conn: &Connection, name: &str) -> Result<Folder, String> {
+    conn.execute(
+        "INSERT INTO folders (name, created_at) VALUES (?1, ?2)",
+        params![name, now_unix()],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(Folder {
+        id: conn.last_insert_rowid(),
+        name: name.to_string(),
+    })
+}
+
+/// Lists all virtual folders, ordered alphabetically by name.
+pub fn list_folders(conn: &Connection) -> Result<Vec<Folder>, String> {
+    let mut stmt = conn
+        .prepare("SELECT id, name FROM folders ORDER BY name COLLATE NOCASE")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(Folder {
+                id: row.get(0)?,
+                name: row.get(1)?,
+            })
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|e| e.to_string())?;
+    Ok(rows)
+}
+
+/// Deletes a virtual folder and all of its clip memberships. The clips
+/// themselves are untouched (they simply revert to unsorted).
+pub fn delete_folder(conn: &Connection, folder_id: i64) -> Result<(), String> {
+    conn.execute(
+        "DELETE FROM clip_folders WHERE folder_id = ?1",
+        params![folder_id],
+    )
+    .map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM folders WHERE id = ?1", params![folder_id])
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Adds a clip to a folder. Idempotent — re-adding an existing membership is a
+/// no-op (a clip may belong to many folders at once).
+pub fn add_clip_to_folder(conn: &Connection, clip_id: i64, folder_id: i64) -> Result<(), String> {
+    conn.execute(
+        "INSERT OR IGNORE INTO clip_folders (clip_id, folder_id) VALUES (?1, ?2)",
+        params![clip_id, folder_id],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Detaches a clip from a single folder, leaving its other memberships intact.
+pub fn remove_clip_from_folder(
+    conn: &Connection,
+    clip_id: i64,
+    folder_id: i64,
+) -> Result<(), String> {
+    conn.execute(
+        "DELETE FROM clip_folders WHERE clip_id = ?1 AND folder_id = ?2",
+        params![clip_id, folder_id],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Lists the clips that belong to a given folder, most recently added first.
+pub fn list_clips_in_folder(conn: &Connection, folder_id: i64) -> Result<Vec<ClipRow>, String> {
+    let mut stmt = conn
+        .prepare(&format!(
+            "SELECT {SELECT_COLS} FROM clips
+             JOIN clip_folders ON clip_folders.clip_id = clips.id
+             WHERE clip_folders.folder_id = ?1
+             ORDER BY clips.id DESC"
+        ))
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(params![folder_id], row_from)
+        .map_err(|e| e.to_string())?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|e| e.to_string())?;
+    Ok(rows)
+}
+
+/// Lists clips that are not in any folder — the "Unsorted" view (spec §4.2),
+/// most recently added first.
+pub fn list_unsorted_clips(conn: &Connection) -> Result<Vec<ClipRow>, String> {
+    let mut stmt = conn
+        .prepare(&format!(
+            "SELECT {SELECT_COLS} FROM clips
+             WHERE id NOT IN (SELECT clip_id FROM clip_folders)
+             ORDER BY id DESC"
+        ))
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], row_from)
+        .map_err(|e| e.to_string())?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|e| e.to_string())?;
+    Ok(rows)
 }
 
 #[cfg(test)]
@@ -306,5 +434,91 @@ mod tests {
         let clips = list_clips(&conn).unwrap();
         assert!(clips[0].favorite);
         assert_eq!(clips[0].display_name, "Clutch");
+    }
+
+    #[test]
+    fn create_folder_returns_row_and_lists_alphabetically() {
+        let conn = mem_db();
+        let games = create_folder(&conn, "Games").unwrap();
+        let apex = create_folder(&conn, "Apex").unwrap();
+        assert!(games.id > 0);
+        assert_eq!(games.name, "Games");
+        let folders = list_folders(&conn).unwrap();
+        assert_eq!(folders.len(), 2);
+        assert_eq!(folders[0].name, "Apex"); // sorted by name, not insertion order
+        assert_eq!(folders[0].id, apex.id);
+        assert_eq!(folders[1].name, "Games");
+        assert_eq!(folders[1].id, games.id);
+    }
+
+    #[test]
+    fn folder_names_are_unique() {
+        let conn = mem_db();
+        create_folder(&conn, "Dupe").unwrap();
+        assert!(create_folder(&conn, "Dupe").is_err());
+    }
+
+    #[test]
+    fn add_clip_to_folder_is_idempotent_and_filters_listing() {
+        let conn = mem_db();
+        let a = upsert_clip(&conn, "/vids/a.mp4", &sample_meta(), None).unwrap();
+        let b = upsert_clip(&conn, "/vids/b.mp4", &sample_meta(), None).unwrap();
+        let folder = create_folder(&conn, "Faves").unwrap();
+        add_clip_to_folder(&conn, a.id, folder.id).unwrap();
+        add_clip_to_folder(&conn, a.id, folder.id).unwrap(); // duplicate is a no-op
+        let in_folder = list_clips_in_folder(&conn, folder.id).unwrap();
+        assert_eq!(in_folder.len(), 1);
+        assert_eq!(in_folder[0].id, a.id);
+        // b was never added.
+        assert!(!in_folder.iter().any(|c| c.id == b.id));
+    }
+
+    #[test]
+    fn remove_clip_from_folder_detaches_only_that_membership() {
+        let conn = mem_db();
+        let a = upsert_clip(&conn, "/vids/a.mp4", &sample_meta(), None).unwrap();
+        let f1 = create_folder(&conn, "One").unwrap();
+        let f2 = create_folder(&conn, "Two").unwrap();
+        add_clip_to_folder(&conn, a.id, f1.id).unwrap();
+        add_clip_to_folder(&conn, a.id, f2.id).unwrap();
+        remove_clip_from_folder(&conn, a.id, f1.id).unwrap();
+        assert_eq!(list_clips_in_folder(&conn, f1.id).unwrap().len(), 0);
+        assert_eq!(list_clips_in_folder(&conn, f2.id).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn list_unsorted_returns_clips_in_no_folder() {
+        let conn = mem_db();
+        let a = upsert_clip(&conn, "/vids/a.mp4", &sample_meta(), None).unwrap();
+        let b = upsert_clip(&conn, "/vids/b.mp4", &sample_meta(), None).unwrap();
+        let folder = create_folder(&conn, "Sorted").unwrap();
+        add_clip_to_folder(&conn, a.id, folder.id).unwrap();
+        let unsorted = list_unsorted_clips(&conn).unwrap();
+        assert_eq!(unsorted.len(), 1);
+        assert_eq!(unsorted[0].id, b.id); // only the un-foldered clip
+    }
+
+    #[test]
+    fn delete_folder_removes_folder_and_memberships_but_keeps_clips() {
+        let conn = mem_db();
+        let a = upsert_clip(&conn, "/vids/a.mp4", &sample_meta(), None).unwrap();
+        let folder = create_folder(&conn, "Temp").unwrap();
+        add_clip_to_folder(&conn, a.id, folder.id).unwrap();
+        delete_folder(&conn, folder.id).unwrap();
+        assert_eq!(list_folders(&conn).unwrap().len(), 0);
+        // The clip itself survives and becomes unsorted again.
+        assert_eq!(list_clips(&conn).unwrap().len(), 1);
+        assert_eq!(list_unsorted_clips(&conn).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn removing_a_clip_also_clears_its_folder_memberships() {
+        let conn = mem_db();
+        let a = upsert_clip(&conn, "/vids/a.mp4", &sample_meta(), None).unwrap();
+        let folder = create_folder(&conn, "Keep").unwrap();
+        add_clip_to_folder(&conn, a.id, folder.id).unwrap();
+        remove_clip(&conn, a.id).unwrap();
+        // No orphaned membership rows left pointing at the deleted clip.
+        assert_eq!(list_clips_in_folder(&conn, folder.id).unwrap().len(), 0);
     }
 }

@@ -159,6 +159,126 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* ─── Folder rail (virtual-folder filters) ──────────────────────────────────── */
+.folder-rail {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px 10px 8px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.folder-chip {
+  padding: 3px 9px;
+  font-size: 11px;
+  border-radius: var(--radius-sm);
+  background: var(--panel-raised);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.folder-chip:hover { background: var(--panel-hover); color: var(--text); }
+.folder-chip.active {
+  background: var(--accent-tint);
+  border-color: var(--accent-border);
+  color: var(--accent-strong);
+}
+
+/* A user folder chip pairs a label button with an inline delete button. */
+.folder-chip-user {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+}
+.folder-chip-label {
+  padding: 3px 4px 3px 9px;
+  font-size: 11px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.folder-chip-label:hover { background: transparent; border-color: transparent; }
+.folder-chip-delete {
+  padding: 3px 7px 3px 3px;
+  font-size: 12px;
+  line-height: 1;
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 120ms ease, color 120ms ease;
+}
+.folder-chip-user:hover .folder-chip-delete { opacity: 1; }
+.folder-chip-delete:hover { background: transparent; color: var(--out-color); border-color: transparent; }
+
+.folder-new { color: var(--text-faint); border-style: dashed; }
+.folder-new-input {
+  padding: 3px 8px;
+  font-size: 11px;
+  width: 110px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--accent-border);
+  background: var(--panel-raised);
+  color: var(--text);
+}
+
+/* ─── Per-clip actions (favorite / add-to-folder / remove) ───────────────────── */
+.library-actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.library-fav {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 120ms ease, color 120ms ease;
+}
+.library-item:hover .library-fav { opacity: 1; }
+.library-fav:hover { background: transparent; border-color: transparent; color: var(--warn); }
+/* A set favorite stays visible even when the row isn't hovered. */
+.library-fav.on { opacity: 1; color: var(--warn); }
+
+.library-folder-select {
+  flex: none;
+  max-width: 74px;
+  padding: 2px 4px;
+  font-size: 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--panel-raised);
+  color: var(--text-dim);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+.library-item:hover .library-folder-select { opacity: 1; }
+
+.library-rename-input {
+  width: 100%;
+  padding: 2px 6px;
+  font-size: 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--accent-border);
+  background: var(--panel-raised);
+  color: var(--text);
+}
+
 /* ─── Editor area ───────────────────────────────────────────────────────────── */
 .editor-panel {
   flex: 1;
