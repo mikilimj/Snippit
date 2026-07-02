@@ -131,14 +131,29 @@ export function prepareAudioTracks(path: string, streamIndices: number[]): Promi
   return invoke<string[]>("prepare_audio_tracks", { path, streamIndices });
 }
 
+/** Fast = stream-copy (near-instant); Compatible = H.264/AAC re-encode (universal). */
+export type ExportMode = "fast" | "compatible";
+
+/** Progress streamed from the Rust export engine (spec §4.5). */
+export interface ExportProgress {
+  fraction: number; // 0.0–1.0 of the whole job
+  phase: string; // "Exporting" | "Analyzing" | "Compressing"
+}
+
 export function exportTrim(
   source: string,
   inSecs: number,
   outSecs: number,
   output: string,
   trackConfigs: TrackConfig[],
+  mode: ExportMode,
 ): Promise<string> {
-  return invoke<string>("export_trim", { source, inSecs, outSecs, output, trackConfigs });
+  return invoke<string>("export_trim", { source, inSecs, outSecs, output, trackConfigs, mode });
+}
+
+/** Cancel the in-flight export (kills ffmpeg); the export promise then rejects with a cancel message. */
+export function cancelExport(): Promise<void> {
+  return invoke<void>("cancel_export");
 }
 
 /** Two-pass H.264/AAC export compressed to a target file size in MB. */
