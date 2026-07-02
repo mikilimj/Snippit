@@ -198,6 +198,21 @@ export function exportSequence(
   return invoke<string>("export_sequence", { segments, music, output });
 }
 
+/** The watched-mode source folder, or null when nothing is relocatable (§4.7). */
+export function getWatchedFolder(): Promise<string | null> {
+  return invoke<string | null>("get_watched_folder");
+}
+
+/** Move the watched source folder to `dest`; progress arrives via `relocate-progress`. */
+export function relocateWatchedFolder(dest: string): Promise<string> {
+  return invoke<string>("relocate_watched_folder", { dest });
+}
+
+/** Cancel the running folder relocation (safe at any point). */
+export function cancelRelocate(): Promise<void> {
+  return invoke<void>("cancel_relocate");
+}
+
 export interface SetupResult {
   rootPath: string;
   warnings: string[];
