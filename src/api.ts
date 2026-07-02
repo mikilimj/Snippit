@@ -59,3 +59,28 @@ export function exportCompressed(
     targetMb,
   });
 }
+
+export interface SetupResult {
+  rootPath: string;
+  warnings: string[];
+}
+
+export function getAppRoot(): Promise<string | null> {
+  return invoke<string | null>("get_app_root");
+}
+
+export function checkRootDirStatus(path: string): Promise<boolean> {
+  return invoke<boolean>("check_root_dir_status", { path });
+}
+
+export function checkPathWritable(path: string): Promise<boolean> {
+  return invoke<boolean>("check_path_writable", { path });
+}
+
+export function completeSetup(
+  rootPath: string,
+  ingestionMode: "import" | "empty" | "watch",
+  sourceFolder: string | null,
+): Promise<SetupResult> {
+  return invoke<SetupResult>("complete_setup", { rootPath, ingestionMode, sourceFolder });
+}

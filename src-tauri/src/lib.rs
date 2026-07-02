@@ -171,6 +171,35 @@ async fn export_compressed(
     }
 }
 
+#[tauri::command]
+fn get_app_root(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    Ok(setup::read_pointer_file(&config_dir))
+}
+
+#[tauri::command]
+fn check_root_dir_status(path: String) -> Result<bool, String> {
+    setup::is_dir_empty_or_absent(std::path::Path::new(&path))
+}
+
+#[tauri::command]
+fn check_path_writable(path: String) -> bool {
+    setup::is_writable(std::path::Path::new(&path))
+}
+
+#[tauri::command]
+fn complete_setup(
+    app: tauri::AppHandle,
+    root_path: String,
+    ingestion_mode: String,
+    source_folder: Option<String>,
+) -> Result<setup::SetupResult, String> {
+    let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    let root = std::path::Path::new(&root_path);
+    let source = source_folder.as_deref().map(std::path::Path::new);
+    setup::complete_setup_at(root, &config_dir, &ingestion_mode, source)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
