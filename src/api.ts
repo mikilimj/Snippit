@@ -41,27 +41,21 @@ export function exportTrim(
   return invoke<string>("export_trim", { source, inSecs, outSecs, output, trackConfigs });
 }
 
-export interface SetupResult {
-  rootPath: string;
-  warnings: string[];
-}
-
-export function getAppRoot(): Promise<string | null> {
-  return invoke<string | null>("get_app_root");
-}
-
-export function checkRootDirStatus(path: string): Promise<boolean> {
-  return invoke<boolean>("check_root_dir_status", { path });
-}
-
-export function checkPathWritable(path: string): Promise<boolean> {
-  return invoke<boolean>("check_path_writable", { path });
-}
-
-export function completeSetup(
-  rootPath: string,
-  ingestionMode: "import" | "empty" | "watch",
-  sourceFolder: string | null,
-): Promise<SetupResult> {
-  return invoke<SetupResult>("complete_setup", { rootPath, ingestionMode, sourceFolder });
+/** Two-pass H.264/AAC export compressed to a target file size in MB. */
+export function exportCompressed(
+  source: string,
+  inSecs: number,
+  outSecs: number,
+  output: string,
+  trackConfigs: TrackConfig[],
+  targetMb: number,
+): Promise<string> {
+  return invoke<string>("export_compressed", {
+    source,
+    inSecs,
+    outSecs,
+    output,
+    trackConfigs,
+    targetMb,
+  });
 }

@@ -292,6 +292,39 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* ─── Export size picker ────────────────────────────────────────────────────── */
+.export-size {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.export-size-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #666;
+}
+
+.export-size-select,
+.export-size-custom {
+  border-radius: 5px;
+  border: 1px solid #3a3a3a;
+  padding: 5px 8px;
+  font-size: 13px;
+  font-family: inherit;
+  color: #d0d0d0;
+  background: #2a2a2a;
+  cursor: pointer;
+}
+.export-size-select:hover,
+.export-size-custom:hover { border-color: #4a8fc0; }
+.export-size-select:focus,
+.export-size-custom:focus { outline: none; border-color: #4a8fc0; }
+
+.export-size-custom { width: 70px; cursor: text; }
+
 /* ─── Buttons ───────────────────────────────────────────────────────────────── */
 button {
   border-radius: var(--radius-sm);
