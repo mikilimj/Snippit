@@ -5,7 +5,7 @@
 //! `open_db` from `<root>/library.db`.
 
 use crate::probe::ClipMeta;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -245,6 +245,157 @@ pub fn relink_clip_prefix(
         }
     }
     Ok(changed)
+}
+
+/// Finds a clip's id by exact path, if indexed.
+pub fn clip_id_by_path(conn: &Connection, path: &str) -> Result<Option<i64>, String> {
+    conn.query_row("SELECT id FROM clips WHERE path = ?1", params![path], |r| r.get(0))
+        .optional()
+        .map_err(|e| e.to_string())
+}
+
+/// Finds a folder's id by exact name, if it exists.
+pub fn folder_id_by_name(conn: &Connection, name: &str) -> Result<Option<i64>, String> {
+    conn.query_row("SELECT id FROM folders WHERE name = ?1", params![name], |r| r.get(0))
+        .optional()
+        .map_err(|e| e.to_string())
+}
+
+/// Summary of a library import (spec §4.6).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportStats {
+    pub added: usize,
+    pub missing: usize,
+    pub folders: usize,
+}
+
+/// Copies this library's index into a fresh DB at `dest_path`, rewriting every
+/// clip path relative to `root` (spec §4.6). Ids are preserved so folder
+/// memberships copy verbatim; thumbnails are dropped (cache regenerates lazily).
+/// Returns (relative_path, absolute_source_path) for each clip so the caller can
+/// optionally add the files to the bundle.
+pub fn export_index(
+    src: &Connection,
+    dest_path: &Path,
+    root: &str,
+) -> Result<Vec<(String, String)>, String> {
+    let dest = open_db(dest_path)?;
+    let mut files = Vec::new();
+    for c in list_clips(src)? {
+        let rel = crate::bundle::relativize_path(&c.path, root);
+        dest.execute(
+            "INSERT INTO clips
+                (id, path, display_name, duration_secs, width, height, container,
+                 video_codec, audio_track_count, thumbnail_path, favorite, missing, added_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL, ?10, 0, ?11)",
+            params![
+                c.id, rel, c.display_name, c.duration_secs, c.width as i64, c.height as i64,
+                c.container, c.video_codec, c.audio_track_count as i64, c.favorite as i64, c.added_at
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+        files.push((rel, c.path));
+    }
+    for f in list_folders(src)? {
+        dest.execute(
+            "INSERT INTO folders (id, name, created_at) VALUES (?1, ?2, 0)",
+            params![f.id, f.name],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    let memberships = read_memberships(src)?;
+    for (clip_id, folder_id) in memberships {
+        dest.execute(
+            "INSERT OR IGNORE INTO clip_folders (clip_id, folder_id) VALUES (?1, ?2)",
+            params![clip_id, folder_id],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    Ok(files)
+}
+
+/// Imports a bundle's index into this library (spec §4.6). Clip paths are
+/// re-rooted under `new_root`; a clip whose file isn't found there is flagged
+/// `missing` (reusing the missing-clip system). Folders are merged by name and
+/// memberships carried over. With `replace`, the existing library is cleared
+/// first; otherwise clips already present (by path) are left untouched.
+pub fn import_index(
+    dest: &Connection,
+    bundle: &Connection,
+    new_root: &str,
+    replace: bool,
+) -> Result<ImportStats, String> {
+    if replace {
+        dest.execute_batch(
+            "DELETE FROM clip_folders; DELETE FROM folders; DELETE FROM clips;",
+        )
+        .map_err(|e| e.to_string())?;
+    }
+
+    let mut folder_map: std::collections::HashMap<i64, i64> = std::collections::HashMap::new();
+    let mut folders_added = 0;
+    for f in list_folders(bundle)? {
+        let dest_id = match folder_id_by_name(dest, &f.name)? {
+            Some(id) => id,
+            None => {
+                folders_added += 1;
+                create_folder(dest, &f.name)?.id
+            }
+        };
+        folder_map.insert(f.id, dest_id);
+    }
+
+    let mut clip_map: std::collections::HashMap<i64, i64> = std::collections::HashMap::new();
+    let mut added = 0;
+    let mut missing = 0;
+    for c in list_clips(bundle)? {
+        let abs = crate::bundle::absolutize_path(&c.path, new_root);
+        let dest_id = match clip_id_by_path(dest, &abs)? {
+            Some(id) => id, // merge: keep the existing clip
+            None => {
+                let is_missing = !Path::new(&abs).exists();
+                dest.execute(
+                    "INSERT INTO clips
+                        (path, display_name, duration_secs, width, height, container,
+                         video_codec, audio_track_count, thumbnail_path, favorite, missing, added_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, ?9, ?10, ?11)",
+                    params![
+                        abs, c.display_name, c.duration_secs, c.width as i64, c.height as i64,
+                        c.container, c.video_codec, c.audio_track_count as i64, c.favorite as i64,
+                        is_missing as i64, c.added_at
+                    ],
+                )
+                .map_err(|e| e.to_string())?;
+                added += 1;
+                if is_missing {
+                    missing += 1;
+                }
+                dest.last_insert_rowid()
+            }
+        };
+        clip_map.insert(c.id, dest_id);
+    }
+
+    for (clip_id, folder_id) in read_memberships(bundle)? {
+        if let (Some(&dc), Some(&df)) = (clip_map.get(&clip_id), folder_map.get(&folder_id)) {
+            add_clip_to_folder(dest, dc, df)?;
+        }
+    }
+
+    Ok(ImportStats { added, missing, folders: folders_added })
+}
+
+fn read_memberships(conn: &Connection) -> Result<Vec<(i64, i64)>, String> {
+    let mut stmt = conn
+        .prepare("SELECT clip_id, folder_id FROM clip_folders")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .map_err(|e| e.to_string())?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|e| e.to_string())?;
+    Ok(rows)
 }
 
 /// Creates a new virtual folder and returns it. Fails if the name is already
@@ -590,5 +741,93 @@ mod tests {
         assert!(paths.contains(&"/new/place/a.mp4".to_string()));
         assert!(paths.contains(&"/new/place/sub/b.mp4".to_string()));
         assert!(paths.contains(&"/elsewhere/c.mp4".to_string())); // outside the root, untouched
+    }
+
+    #[test]
+    fn lookup_helpers_find_by_path_and_name() {
+        let conn = mem_db();
+        let a = upsert_clip(&conn, "/v/a.mp4", &sample_meta(), None).unwrap();
+        let f = create_folder(&conn, "Faves").unwrap();
+        assert_eq!(clip_id_by_path(&conn, "/v/a.mp4").unwrap(), Some(a.id));
+        assert_eq!(clip_id_by_path(&conn, "/v/missing.mp4").unwrap(), None);
+        assert_eq!(folder_id_by_name(&conn, "Faves").unwrap(), Some(f.id));
+        assert_eq!(folder_id_by_name(&conn, "Nope").unwrap(), None);
+    }
+
+    #[test]
+    fn export_index_relativizes_paths_and_preserves_folders() {
+        let src = mem_db();
+        let a = upsert_clip(&src, "/root/a.mp4", &sample_meta(), None).unwrap();
+        upsert_clip(&src, "/root/sub/b.mp4", &sample_meta(), None).unwrap();
+        set_favorite(&src, a.id, true).unwrap();
+        let folder = create_folder(&src, "Best").unwrap();
+        add_clip_to_folder(&src, a.id, folder.id).unwrap();
+
+        let dir = std::env::temp_dir().join(format!("clipsnip_expidx_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let dest_db = dir.join("bundle.db");
+        let files = export_index(&src, &dest_db, "/root").unwrap();
+
+        // File list pairs relative archive names with the real source paths.
+        assert!(files.contains(&("a.mp4".to_string(), "/root/a.mp4".to_string())));
+        assert!(files.contains(&("sub/b.mp4".to_string(), "/root/sub/b.mp4".to_string())));
+
+        // The exported DB stores relative paths, favorites, and folder membership.
+        let bundle = open_db(&dest_db).unwrap();
+        let paths: Vec<String> = list_clips(&bundle).unwrap().into_iter().map(|c| c.path).collect();
+        assert!(paths.contains(&"a.mp4".to_string()));
+        assert!(paths.contains(&"sub/b.mp4".to_string()));
+        assert_eq!(list_folders(&bundle).unwrap().len(), 1);
+        let best = folder_id_by_name(&bundle, "Best").unwrap().unwrap();
+        assert_eq!(list_clips_in_folder(&bundle, best).unwrap().len(), 1);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn import_index_merges_reroots_and_flags_missing() {
+        let dir = std::env::temp_dir().join(format!("clipsnip_impidx_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // One real file (found) and one that won't exist (missing) under the new root.
+        std::fs::write(dir.join("a.mp4"), b"v").unwrap();
+
+        let bundle = mem_db();
+        let ba = upsert_clip(&bundle, "a.mp4", &sample_meta(), None).unwrap();
+        upsert_clip(&bundle, "gone.mp4", &sample_meta(), None).unwrap();
+        let bf = create_folder(&bundle, "Keep").unwrap();
+        add_clip_to_folder(&bundle, ba.id, bf.id).unwrap();
+
+        let dest = mem_db();
+        let stats = import_index(&dest, &bundle, dir.to_str().unwrap(), false).unwrap();
+        assert_eq!(stats.added, 2);
+        assert_eq!(stats.missing, 1); // gone.mp4 not on disk
+        assert_eq!(stats.folders, 1);
+
+        let clips = list_clips(&dest).unwrap();
+        let found = clips.iter().find(|c| c.path.ends_with("a.mp4")).unwrap();
+        assert!(!found.missing);
+        let gone = clips.iter().find(|c| c.path.ends_with("gone.mp4")).unwrap();
+        assert!(gone.missing);
+        // Folder membership carried over onto the re-rooted clip.
+        let keep = folder_id_by_name(&dest, "Keep").unwrap().unwrap();
+        assert_eq!(list_clips_in_folder(&dest, keep).unwrap().len(), 1);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn import_index_replace_wipes_existing_first() {
+        let dest = mem_db();
+        upsert_clip(&dest, "/old/x.mp4", &sample_meta(), None).unwrap();
+        let bundle = mem_db();
+        upsert_clip(&bundle, "y.mp4", &sample_meta(), None).unwrap();
+
+        import_index(&dest, &bundle, "/new", true).unwrap();
+        let paths: Vec<String> = list_clips(&dest).unwrap().into_iter().map(|c| c.path).collect();
+        assert_eq!(paths.len(), 1);
+        assert!(paths[0].ends_with("y.mp4"));
+        assert!(!paths.iter().any(|p| p.contains("x.mp4"))); // old library gone
     }
 }
