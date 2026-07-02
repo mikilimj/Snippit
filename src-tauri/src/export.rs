@@ -8,6 +8,26 @@ pub struct TrackConfig {
     pub volume: f64,
 }
 
+/// One clip in a stitched sequence: a source file and the in/out span to take
+/// from it (spec §4.3). Straight cuts only — no transitions in v1.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Segment {
+    pub input: String,
+    pub in_secs: f64,
+    pub out_secs: f64,
+}
+
+/// A music file overlaid across the whole sequence at `volume`, optionally looped
+/// to the sequence length (spec §4.3).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MusicOverlay {
+    pub path: String,
+    pub volume: f64,
+    pub loop_to_length: bool,
+}
+
 /// Build ffmpeg args for a trim export with per-track audio control.
 ///
 /// Fast path (stream copy): exactly one enabled track, at volume ≈ 1.0.
@@ -170,6 +190,78 @@ pub fn build_trim_compatible_args(
         "+faststart".to_string(),
         output.to_string(),
     ]);
+    args
+}
+
+/// Build ffmpeg args to stitch `segments` into one H.264/AAC MP4 (spec §4.3).
+///
+/// Each segment is fast-seeked (`-ss`/`-t`), scaled+letterboxed to the common
+/// `width`×`height` (so mixed resolutions/aspect ratios concat cleanly), then
+/// joined with `concat`. An optional `music` overlay is mixed over the whole
+/// sequence at its own volume — `-stream_loop -1` plus `amix duration=first`
+/// loops it to the video length when requested. Segments are assumed to carry
+/// audio (game recordings do).
+pub fn build_sequence_args(
+    segments: &[Segment],
+    width: u32,
+    height: u32,
+    music: Option<&MusicOverlay>,
+    output: &str,
+) -> Vec<String> {
+    let mut args = vec!["-y".to_string()];
+    for s in segments {
+        args.push("-ss".to_string());
+        args.push(format!("{:.3}", s.in_secs));
+        args.push("-t".to_string());
+        args.push(format!("{:.3}", s.out_secs - s.in_secs));
+        args.push("-i".to_string());
+        args.push(s.input.clone());
+    }
+    if let Some(m) = music {
+        if m.loop_to_length {
+            args.push("-stream_loop".to_string());
+            args.push("-1".to_string());
+        }
+        args.push("-i".to_string());
+        args.push(m.path.clone());
+    }
+
+    let n = segments.len();
+    let mut fc = String::new();
+    for i in 0..n {
+        // Letterbox each source into the target frame, resetting timestamps so
+        // concat sees a clean 0-based stream.
+        fc.push_str(&format!(
+            "[{i}:v]scale={width}:{height}:force_original_aspect_ratio=decrease,\
+             pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1,setpts=PTS-STARTPTS[v{i}];"
+        ));
+        fc.push_str(&format!("[{i}:a]asetpts=PTS-STARTPTS[a{i}];"));
+    }
+    let labels: String = (0..n).map(|i| format!("[v{i}][a{i}]")).collect();
+    fc.push_str(&format!("{labels}concat=n={n}:v=1:a=1[cv][ca]"));
+
+    let audio_out = if let Some(m) = music {
+        let mi = n; // music is the input after all segments
+        fc.push_str(&format!(";[{mi}:a]volume={:.3}[m];", m.volume));
+        fc.push_str("[ca][m]amix=inputs=2:duration=first:normalize=0[outa]");
+        "[outa]"
+    } else {
+        "[ca]"
+    };
+
+    args.push("-filter_complex".to_string());
+    args.push(fc);
+    args.push("-map".to_string());
+    args.push("[cv]".to_string());
+    args.push("-map".to_string());
+    args.push(audio_out.to_string());
+    args.extend(
+        [
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-c:a", "aac", "-b:a", "192k",
+            "-movflags", "+faststart", output,
+        ]
+        .map(String::from),
+    );
     args
 }
 
@@ -595,5 +687,64 @@ mod tests {
         // Non-timestamp lines yield nothing.
         assert_eq!(parse_progress_line("frame=42", 10.0), None);
         assert_eq!(parse_progress_line("out_time_us=N/A", 10.0), None);
+    }
+
+    // ── Sequence stitching + music overlay (spec §4.3) ───────────────────────────
+
+    fn seg(input: &str, in_s: f64, out_s: f64) -> Segment {
+        Segment { input: input.to_string(), in_secs: in_s, out_secs: out_s }
+    }
+
+    #[test]
+    fn sequence_two_segments_concats_and_reencodes() {
+        let segs = vec![seg("a.mp4", 0.0, 2.0), seg("b.mp4", 1.0, 4.0)];
+        let args = build_sequence_args(&segs, 1280, 720, None, "out.mp4");
+        // One -i per segment, each fast-seeked and duration-limited.
+        assert_eq!(args.iter().filter(|a| *a == "-i").count(), 2);
+        assert_eq!(args.iter().filter(|a| *a == "-ss").count(), 2);
+        let fc = &args[args.iter().position(|a| a == "-filter_complex").unwrap() + 1];
+        assert!(fc.contains("concat=n=2:v=1:a=1"));
+        assert!(fc.contains("[v0][a0][v1][a1]concat"));
+        assert!(fc.contains("scale=1280:720"));
+        // Straight concat output mapped, no music mixing.
+        assert!(args.windows(2).any(|w| w[0] == "-map" && w[1] == "[cv]"));
+        assert!(args.windows(2).any(|w| w[0] == "-map" && w[1] == "[ca]"));
+        assert!(!fc.contains("amix"));
+        assert!(args.windows(2).any(|w| w[0] == "-c:v" && w[1] == "libx264"));
+        assert!(args.windows(2).any(|w| w[0] == "-movflags" && w[1] == "+faststart"));
+        assert_eq!(args.last().unwrap(), "out.mp4");
+    }
+
+    #[test]
+    fn sequence_single_segment_still_valid() {
+        let args = build_sequence_args(&[seg("a.mp4", 0.5, 3.5)], 1920, 1080, None, "out.mp4");
+        assert_eq!(args.iter().filter(|a| *a == "-i").count(), 1);
+        let fc = &args[args.iter().position(|a| a == "-filter_complex").unwrap() + 1];
+        assert!(fc.contains("concat=n=1:v=1:a=1"));
+    }
+
+    #[test]
+    fn sequence_with_looped_music_mixes_and_stream_loops() {
+        let segs = vec![seg("a.mp4", 0.0, 2.0)];
+        let music = MusicOverlay { path: "song.mp3".into(), volume: 0.4, loop_to_length: true };
+        let args = build_sequence_args(&segs, 1280, 720, Some(&music), "out.mp4");
+        // Music is a third input, looped so it fills the whole sequence.
+        assert!(args.windows(2).any(|w| w[0] == "-stream_loop" && w[1] == "-1"));
+        assert_eq!(args.iter().filter(|a| *a == "-i").count(), 2); // 1 clip + music
+        let fc = &args[args.iter().position(|a| a == "-filter_complex").unwrap() + 1];
+        assert!(fc.contains("[1:a]volume=0.400")); // music input index = segments.len()
+        assert!(fc.contains("amix=inputs=2:duration=first"));
+        assert!(fc.contains("[outa]"));
+        assert!(args.windows(2).any(|w| w[0] == "-map" && w[1] == "[outa]"));
+    }
+
+    #[test]
+    fn sequence_with_unlooped_music_has_no_stream_loop() {
+        let segs = vec![seg("a.mp4", 0.0, 2.0)];
+        let music = MusicOverlay { path: "song.mp3".into(), volume: 1.0, loop_to_length: false };
+        let args = build_sequence_args(&segs, 1280, 720, Some(&music), "out.mp4");
+        assert!(!args.contains(&"-stream_loop".to_string()));
+        let fc = &args[args.iter().position(|a| a == "-filter_complex").unwrap() + 1];
+        assert!(fc.contains("amix=inputs=2:duration=first"));
     }
 }

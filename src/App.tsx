@@ -3,8 +3,10 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { probeClip, exportTrim, exportCompressed, cancelExport, prepareAudioTracks, getAppRoot, addToLibrary, listLibrary, removeFromLibrary, rescanLibrary, setClipFavorite, renameLibraryClip, createFolder, listFolders, deleteFolder, addClipToFolder, removeClipFromFolder, listClipsInFolder, listUnsortedLibrary, ensureProxy, type ClipMeta, type ClipRow, type ExportMode, type ExportProgress, type Folder, type TrackConfig, type SetupResult } from "./api";
+import { exportSequence, type MusicOverlay } from "./api";
 import { newClipBelongsInView, applyFavorite, applyRename, type LibraryView } from "./libraryView";
 import { previewPath, shouldTryProxy } from "./preview";
+import { moveSegment, removeSegment, sequenceDuration, toBackendSegments, type SequenceSegment } from "./sequence";
 import { isCustomSelectionValid, resolveTargetMb, TARGET_SIZE_PRESETS } from "./exportOptions";
 import { setIn, setOut } from "./trim";
 import { Timeline } from "./Timeline";
@@ -42,6 +44,9 @@ function App() {
   const [exportMode, setExportMode] = useState<ExportMode>("fast");
   const [exporting, setExporting] = useState(false);
   const [progress, setProgress] = useState<ExportProgress | null>(null);
+  // Light timeline (spec §4.3): an ordered list of trimmed segments + optional music.
+  const [segments, setSegments] = useState<SequenceSegment[]>([]);
+  const [music, setMusic] = useState<MusicOverlay | null>(null);
   // `undefined` = still checking, `null` = needs first-run setup, string = configured root
   const [appRoot, setAppRoot] = useState<string | null | undefined>(undefined);
 
@@ -354,6 +359,50 @@ function App() {
       await cancelExport();
     } catch (e) {
       console.error("Cancel failed:", e);
+    }
+  }
+
+  // ── Sequence (light timeline) + music ─────────────────────────────────────────
+  function addToSequence() {
+    if (!path || inPoint === null || outPoint === null) {
+      setStatus("Set In and Out before adding to the sequence.");
+      return;
+    }
+    setSegments(prev => [
+      ...prev,
+      { id: Date.now(), path, displayName: basename(path), inSecs: inPoint, outSecs: outPoint },
+    ]);
+  }
+
+  async function pickMusic() {
+    const selected = await open({
+      multiple: false,
+      filters: [{ name: "Audio", extensions: ["mp3", "aac", "m4a", "wav", "flac", "ogg", "opus"] }],
+    });
+    if (typeof selected !== "string") return;
+    setMusic({ path: selected, volume: 1.0, loopToLength: true });
+  }
+
+  function updateMusic(patch: Partial<MusicOverlay>) {
+    setMusic(prev => (prev ? { ...prev, ...patch } : prev));
+  }
+
+  async function exportSequenceClick() {
+    if (segments.length === 0) return;
+    const dest = await save({ defaultPath: "sequence.mp4" });
+    if (!dest) return;
+    setExporting(true);
+    setProgress({ fraction: 0, phase: "Stitching" });
+    setStatus(`Stitching ${segments.length} clip${segments.length > 1 ? "s" : ""}…`);
+    try {
+      const out = await exportSequence(toBackendSegments(segments), music, dest);
+      setStatus(`Exported: ${out}`);
+    } catch (e) {
+      const msg = String(e);
+      setStatus(/cancel/i.test(msg) ? "Export cancelled." : `Export failed: ${msg}`);
+    } finally {
+      setExporting(false);
+      setProgress(null);
     }
   }
 
@@ -942,6 +991,116 @@ function App() {
               </button>
               {exporting && (
                 <button className="btn-cancel" onClick={cancelExportClick}>Cancel</button>
+              )}
+            </div>
+
+            {/* Light timeline: stitch trimmed clips + optional music (§4.3) */}
+            <div className="sequence-panel">
+              <div className="sequence-header">
+                <span className="sequence-title">Sequence</span>
+                <div className="sequence-actions">
+                  <button
+                    className="btn-sm"
+                    onClick={addToSequence}
+                    disabled={inPoint === null || outPoint === null}
+                    title="Append the current In→Out selection to the sequence"
+                  >
+                    + Add clip
+                  </button>
+                  <button className="btn-sm" onClick={pickMusic} title="Overlay a music track">
+                    ♪ {music ? "Change music" : "Add music"}
+                  </button>
+                </div>
+              </div>
+
+              {segments.length === 0 ? (
+                <p className="sequence-empty">
+                  Trim a clip, then “Add clip” to build a sequence. Straight cuts, played in order.
+                </p>
+              ) : (
+                <>
+                  <ol className="sequence-list">
+                    {segments.map((seg, i) => (
+                      <li key={seg.id} className="sequence-item">
+                        <span className="sequence-index">{i + 1}</span>
+                        <span className="sequence-name" title={seg.path}>{seg.displayName}</span>
+                        <span className="sequence-span">
+                          {seg.inSecs.toFixed(1)}–{seg.outSecs.toFixed(1)}s
+                        </span>
+                        <div className="sequence-item-actions">
+                          <button
+                            className="seq-move"
+                            disabled={i === 0}
+                            onClick={() => setSegments(prev => moveSegment(prev, i, -1))}
+                            title="Move up"
+                            aria-label="Move up"
+                          >
+                            ▲
+                          </button>
+                          <button
+                            className="seq-move"
+                            disabled={i === segments.length - 1}
+                            onClick={() => setSegments(prev => moveSegment(prev, i, 1))}
+                            title="Move down"
+                            aria-label="Move down"
+                          >
+                            ▼
+                          </button>
+                          <button
+                            className="library-remove"
+                            onClick={() => setSegments(prev => removeSegment(prev, seg.id))}
+                            title="Remove from sequence"
+                            aria-label="Remove from sequence"
+                          >
+                            ×
+                          </button>
+                        </div>
+                      </li>
+                    ))}
+                  </ol>
+                  <div className="sequence-total">
+                    Total: {sequenceDuration(segments).toFixed(1)}s
+                  </div>
+                </>
+              )}
+
+              {music && (
+                <div className="music-row">
+                  <span className="music-name" title={music.path}>♪ {basename(music.path)}</span>
+                  <div className="audio-track-volume">
+                    <input
+                      type="range"
+                      min={0}
+                      max={200}
+                      value={Math.round(music.volume * 100)}
+                      onChange={e => updateMusic({ volume: parseInt(e.target.value) / 100 })}
+                      className="audio-volume-slider"
+                    />
+                    <span className="audio-volume-pct">{Math.round(music.volume * 100)}%</span>
+                  </div>
+                  <label className="music-loop">
+                    <input
+                      type="checkbox"
+                      checked={music.loopToLength}
+                      onChange={e => updateMusic({ loopToLength: e.target.checked })}
+                    />
+                    Loop
+                  </label>
+                  <button
+                    className="library-remove"
+                    onClick={() => setMusic(null)}
+                    title="Remove music"
+                    aria-label="Remove music"
+                  >
+                    ×
+                  </button>
+                </div>
+              )}
+
+              {segments.length > 0 && (
+                <button className="btn-export" onClick={exportSequenceClick} disabled={exporting}>
+                  {exporting ? "Exporting…" : `Export sequence (${segments.length})`}
+                </button>
               )}
             </div>
 
