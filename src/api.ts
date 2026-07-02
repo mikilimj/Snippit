@@ -213,6 +213,32 @@ export function cancelRelocate(): Promise<void> {
   return invoke<void>("cancel_relocate");
 }
 
+/** Summary of a library import. Mirrors Rust `library::ImportStats`. */
+export interface ImportStats {
+  added: number;
+  missing: number;
+  folders: number;
+}
+
+/** Export the library to a portable zip bundle; progress via `bundle-progress` (§4.6). */
+export function exportLibrary(dest: string, includeFiles: boolean): Promise<string> {
+  return invoke<string>("export_library", { dest, includeFiles });
+}
+
+/** Import a bundle, re-rooting clip paths under `newRoot`; merge or replace (§4.6). */
+export function importLibrary(
+  bundlePath: string,
+  newRoot: string,
+  replace: boolean,
+): Promise<ImportStats> {
+  return invoke<ImportStats>("import_library", { bundlePath, newRoot, replace });
+}
+
+/** Cancel the running library export/import. */
+export function cancelBundle(): Promise<void> {
+  return invoke<void>("cancel_bundle");
+}
+
 export interface SetupResult {
   rootPath: string;
   warnings: string[];

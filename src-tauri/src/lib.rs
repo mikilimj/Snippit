@@ -1,4 +1,5 @@
 mod probe;
+pub mod bundle;
 pub mod export;
 pub mod setup;
 pub mod library;
@@ -127,6 +128,10 @@ struct ExportProgress {
 /// Cancel flag for the single in-flight folder relocation (spec §4.7).
 #[derive(Default)]
 struct RelocateJob(AtomicBool);
+
+/// Cancel flag for the single in-flight library export/import bundle (spec §4.6).
+#[derive(Default)]
+struct BundleJob(AtomicBool);
 
 /// Outcome of one ffmpeg run under progress/cancel supervision.
 enum RunOutcome {
@@ -447,6 +452,162 @@ async fn relocate_watched_folder(app: tauri::AppHandle, dest: String) -> Result<
     };
     setup::write_settings(&root_path, &updated)?;
     Ok(dest)
+}
+
+/// Requests cancellation of the running library export/import (spec §4.6).
+#[tauri::command]
+fn cancel_bundle(app: tauri::AppHandle) {
+    app.state::<BundleJob>().0.store(true, Ordering::SeqCst);
+}
+
+/// Copies a directory tree file-by-file, mirroring structure, with progress and
+/// cancel. Returns false if cancelled. Used to lay a bundle's clip files down at
+/// the chosen import root.
+fn copy_tree(
+    src_root: &Path,
+    dest_root: &Path,
+    cancelled: &dyn Fn() -> bool,
+    on_progress: &mut dyn FnMut(usize, usize),
+) -> Result<bool, String> {
+    let files = relocate::enumerate_files(src_root);
+    let total = files.len();
+    for (i, f) in files.iter().enumerate() {
+        if cancelled() {
+            return Ok(false);
+        }
+        let rel = f.strip_prefix(src_root).map_err(|e| e.to_string())?;
+        let dest = dest_root.join(rel);
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        std::fs::copy(f, &dest).map_err(|e| format!("copy {}: {e}", f.display()))?;
+        on_progress(i + 1, total);
+    }
+    Ok(true)
+}
+
+/// Exports the library index + settings to a portable zip bundle at `dest` (spec
+/// §4.6). With `include_files`, every referenced clip is copied into the bundle.
+/// Clip paths are stored relative to the watched folder (or app root). Emits
+/// `bundle-progress`; cancellable.
+#[tauri::command]
+async fn export_library(
+    app: tauri::AppHandle,
+    dest: String,
+    include_files: bool,
+) -> Result<String, String> {
+    let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    let root = setup::read_pointer_file(&config_dir)
+        .ok_or_else(|| "Library is not set up yet".to_string())?;
+    let root_path = PathBuf::from(&root);
+    let settings = setup::read_settings(&root_path);
+    let relativize_root = settings
+        .as_ref()
+        .filter(|s| s.ingestion_mode == "watch")
+        .and_then(|s| s.source_folder.clone())
+        .unwrap_or_else(|| root.clone());
+    let settings_json =
+        std::fs::read_to_string(root_path.join("settings.json")).unwrap_or_else(|_| "{}".to_string());
+
+    app.state::<BundleJob>().0.store(false, Ordering::SeqCst);
+    let app2 = app.clone();
+    let dest_path = PathBuf::from(&dest);
+    let done = tauri::async_runtime::spawn_blocking(move || {
+        let src_conn = open_library(&app2)?;
+        let tmp = std::env::temp_dir().join(format!("clipsnip_export_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
+        let bundle_db = tmp.join("library.db");
+        let files = library::export_index(&src_conn, &bundle_db, &relativize_root)?;
+        let clip_files: Vec<(String, PathBuf)> = if include_files {
+            files.into_iter().map(|(rel, abs)| (rel, PathBuf::from(abs))).collect()
+        } else {
+            Vec::new()
+        };
+        let result = bundle::write_bundle(
+            &dest_path,
+            &bundle_db,
+            &settings_json,
+            &clip_files,
+            &|| app2.state::<BundleJob>().0.load(Ordering::SeqCst),
+            &mut |d, t| {
+                let fraction = if t == 0 { 1.0 } else { d as f64 / t as f64 };
+                let _ = app2.emit(
+                    "bundle-progress",
+                    ExportProgress { fraction, phase: format!("Bundling {d}/{t} files") },
+                );
+            },
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+        result
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    if done {
+        Ok(dest)
+    } else {
+        let _ = std::fs::remove_file(&dest);
+        Err("Export cancelled.".to_string())
+    }
+}
+
+/// Imports a bundle into the current library (spec §4.6): re-roots clip paths under
+/// `new_root`, lays down any bundled clip files there, and merges (or replaces).
+/// Emits `bundle-progress` and, on success, `library-changed`.
+#[tauri::command]
+async fn import_library(
+    app: tauri::AppHandle,
+    bundle_path: String,
+    new_root: String,
+    replace: bool,
+) -> Result<library::ImportStats, String> {
+    app.state::<BundleJob>().0.store(false, Ordering::SeqCst);
+    let app2 = app.clone();
+    let bundle_p = PathBuf::from(&bundle_path);
+    let new_root_p = PathBuf::from(&new_root);
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
+        let tmp = std::env::temp_dir().join(format!("clipsnip_import_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let bundle_db = bundle::read_bundle(&bundle_p, &tmp)?;
+
+        // If the bundle carried clip files, lay them down under the chosen root.
+        let clips_src = tmp.join("clips");
+        if clips_src.is_dir() {
+            let copied = copy_tree(
+                &clips_src,
+                &new_root_p,
+                &|| app2.state::<BundleJob>().0.load(Ordering::SeqCst),
+                &mut |d, t| {
+                    let fraction = if t == 0 { 1.0 } else { d as f64 / t as f64 };
+                    let _ = app2.emit(
+                        "bundle-progress",
+                        ExportProgress { fraction, phase: format!("Copying {d}/{t} files") },
+                    );
+                },
+            )?;
+            if !copied {
+                let _ = std::fs::remove_dir_all(&tmp);
+                return Ok::<Option<library::ImportStats>, String>(None);
+            }
+        }
+
+        let dest_conn = open_library(&app2)?;
+        let bundle_conn = library::open_db(&bundle_db)?;
+        let stats = library::import_index(&dest_conn, &bundle_conn, &new_root, replace)?;
+        let _ = std::fs::remove_dir_all(&tmp);
+        Ok(Some(stats))
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    match outcome {
+        Some(stats) => {
+            let _ = app.emit("library-changed", ());
+            Ok(stats)
+        }
+        None => Err("Import cancelled.".to_string()),
+    }
 }
 
 /// Opens the library database that lives inside the configured app root
@@ -843,6 +1004,7 @@ pub fn run() {
             app.manage(InFlight(Arc::new(Mutex::new(HashSet::new()))));
             app.manage(ExportJob::default());
             app.manage(RelocateJob::default());
+            app.manage(BundleJob::default());
             // Start auto-import if already configured; a first-run launch starts
             // it from complete_setup instead.
             start_watching(app.handle());
@@ -876,7 +1038,10 @@ pub fn run() {
             ensure_proxy,
             get_watched_folder,
             relocate_watched_folder,
-            cancel_relocate
+            cancel_relocate,
+            export_library,
+            import_library,
+            cancel_bundle
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -145,6 +145,22 @@ function App() {
     };
   }, [appRoot, activeView]);
 
+  // A library import (spec §4.6) rewrites the index wholesale — reload the current
+  // view and the folder list when the backend signals it changed.
+  useEffect(() => {
+    if (typeof appRoot !== "string") return;
+    const unlisten = listen("library-changed", () => {
+      loadView(activeView);
+      listFolders()
+        .then(setFolders)
+        .catch(err => console.error("Failed to reload folders:", err));
+    });
+    return () => {
+      unlisten.then(f => f());
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [appRoot, activeView]);
+
   // Force-mute the native <video> element's own audio the moment Web Audio
   // takes over. React's `muted` prop only sets the attribute; on an
   // already-rendering <video> node WebKitGTK doesn't reliably re-read it from
