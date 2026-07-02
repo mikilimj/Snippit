@@ -5,6 +5,7 @@ import { probeClip, exportTrim, exportCompressed, prepareAudioTracks, type ClipM
 import { isCustomSelectionValid, resolveTargetMb, TARGET_SIZE_PRESETS } from "./exportOptions";
 import { setIn, setOut } from "./trim";
 import { Timeline } from "./Timeline";
+import { FirstRunWizard } from "./FirstRunWizard";
 import "./App.css";
 
 interface LibraryEntry {
@@ -50,6 +51,12 @@ function App() {
 
   useEffect(() => {
     invoke<number>("get_media_port").then(setMediaPort);
+  }, []);
+
+  useEffect(() => {
+    getAppRoot()
+      .then(setAppRoot)
+      .catch(() => setAppRoot(null));
   }, []);
 
   // Force-mute the native <video> element's own audio the moment Web Audio
@@ -196,6 +203,13 @@ function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [inPoint, outPoint, meta]);
 
+  function handleSetupComplete(result: SetupResult) {
+    setAppRoot(result.rootPath);
+    if (result.warnings.length > 0) {
+      setStatus(`Setup finished with warnings: ${result.warnings.join("; ")}`);
+    }
+  }
+
   // ── Export ────────────────────────────────────────────────────────────────────
   async function doExport() {
     if (!path || inPoint === null || outPoint === null) {
@@ -284,6 +298,14 @@ function App() {
   }
 
   // ── Render ────────────────────────────────────────────────────────────────────
+  if (appRoot === undefined) {
+    return null;
+  }
+
+  if (appRoot === null) {
+    return <FirstRunWizard onComplete={handleSetupComplete} />;
+  }
+
   return (
     <div className="app-layout">
       {/* Library sidebar */}
