@@ -83,14 +83,44 @@
   border-radius: var(--radius-sm);
   border: 1px solid transparent;
   display: flex;
-  flex-direction: column;
-  gap: 2px;
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
 }
 
 .library-item:hover { background: var(--panel-raised); }
 .library-item.active {
   background: var(--accent-tint);
   border-color: var(--accent-border);
+}
+
+.library-item-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.library-remove {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  border-radius: var(--radius-sm);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 120ms ease, background 120ms ease, color 120ms ease;
+}
+
+.library-item:hover .library-remove { opacity: 1; }
+.library-remove:hover {
+  background: var(--panel);
+  color: var(--text);
 }
 
 .library-name {

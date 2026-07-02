@@ -26,6 +26,38 @@ export function probeClip(path: string): Promise<ClipMeta> {
   return invoke<ClipMeta>("probe_clip", { path });
 }
 
+/** A persisted library row (SQLite index). Mirrors Rust `library::ClipRow`. */
+export interface ClipRow {
+  id: number;
+  path: string;
+  displayName: string;
+  durationSecs: number;
+  width: number;
+  height: number;
+  container: string;
+  videoCodec: string;
+  audioTrackCount: number;
+  thumbnailPath: string | null;
+  favorite: boolean;
+  missing: boolean;
+  addedAt: number;
+}
+
+/** Insert (or refresh the metadata of) a clip in the persistent library index. */
+export function addToLibrary(path: string, meta: ClipMeta): Promise<ClipRow> {
+  return invoke<ClipRow>("add_to_library", { path, meta });
+}
+
+/** Load all persisted library clips, newest first. */
+export function listLibrary(): Promise<ClipRow[]> {
+  return invoke<ClipRow[]>("list_library");
+}
+
+/** Remove a clip from the library index only (never deletes the source file). */
+export function removeFromLibrary(id: number): Promise<void> {
+  return invoke<void>("remove_from_library", { id });
+}
+
 /** Extract each requested audio stream to a temp M4A file and return their paths. */
 export function prepareAudioTracks(path: string, streamIndices: number[]): Promise<string[]> {
   return invoke<string[]>("prepare_audio_tracks", { path, streamIndices });

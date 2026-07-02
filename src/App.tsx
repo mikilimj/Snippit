@@ -1,18 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { probeClip, exportTrim, exportCompressed, prepareAudioTracks, getAppRoot, type ClipMeta, type TrackConfig, type SetupResult } from "./api";
+import { probeClip, exportTrim, exportCompressed, prepareAudioTracks, getAppRoot, addToLibrary, listLibrary, removeFromLibrary, type ClipMeta, type ClipRow, type TrackConfig, type SetupResult } from "./api";
 import { isCustomSelectionValid, resolveTargetMb, TARGET_SIZE_PRESETS } from "./exportOptions";
 import { setIn, setOut } from "./trim";
 import { Timeline } from "./Timeline";
 import { FirstRunWizard } from "./FirstRunWizard";
 import logo from "./assets/logo.png";
 import "./App.css";
-
-interface LibraryEntry {
-  path: string;
-  meta: ClipMeta;
-}
 
 function basename(p: string) {
   return p.split(/[\\/]/).pop() ?? p;
@@ -28,7 +23,7 @@ function App() {
   const [outPoint, setOutPoint] = useState<number | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [currentTime, setCurrentTime] = useState(0);
-  const [library, setLibrary] = useState<LibraryEntry[]>([]);
+  const [library, setLibrary] = useState<ClipRow[]>([]);
   const [mediaPort, setMediaPort] = useState<number | null>(null);
   const [sizeSelection, setSizeSelection] = useState("original");
   const [customMb, setCustomMb] = useState("");
@@ -61,6 +56,14 @@ function App() {
       .then(setAppRoot)
       .catch(() => setAppRoot(null));
   }, []);
+
+  // Load the persisted library index once setup is configured.
+  useEffect(() => {
+    if (typeof appRoot !== "string") return;
+    listLibrary()
+      .then(setLibrary)
+      .catch(err => console.error("Failed to load library:", err));
+  }, [appRoot]);
 
   // Force-mute the native <video> element's own audio the moment Web Audio
   // takes over. React's `muted` prop only sets the attribute; on an
@@ -260,9 +263,37 @@ function App() {
     try {
       const m = await probeClip(p);
       setMeta(m);
-      setLibrary(prev =>
-        prev.some(e => e.path === p) ? prev : [...prev, { path: p, meta: m }]
-      );
+      // Persist to the library index; fall back to an in-session row if the
+      // write fails so the clip still shows in the sidebar.
+      addToLibrary(p, m)
+        .then(row =>
+          setLibrary(prev => [row, ...prev.filter(e => e.path !== p)])
+        )
+        .catch(err => {
+          console.error("Failed to add clip to library:", err);
+          setLibrary(prev =>
+            prev.some(e => e.path === p)
+              ? prev
+              : [
+                  {
+                    id: -Date.now(),
+                    path: p,
+                    displayName: basename(p),
+                    durationSecs: m.durationSecs,
+                    width: m.width,
+                    height: m.height,
+                    container: m.container,
+                    videoCodec: m.videoCodec,
+                    audioTrackCount: m.audioTracks.length,
+                    thumbnailPath: null,
+                    favorite: false,
+                    missing: false,
+                    addedAt: Math.floor(Date.now() / 1000),
+                  },
+                  ...prev,
+                ]
+          );
+        });
 
       if (m.audioTracks.length > 0) {
         const configs: TrackConfig[] = m.audioTracks.map(t => ({
@@ -300,6 +331,19 @@ function App() {
     await openClip(selected);
   }
 
+  // Remove a clip from the library index only — the source file is untouched.
+  async function removeFromLibraryClick(e: React.MouseEvent, entry: ClipRow) {
+    e.stopPropagation();
+    setLibrary(prev => prev.filter(x => x.id !== entry.id));
+    if (entry.id >= 0) {
+      try {
+        await removeFromLibrary(entry.id);
+      } catch (err) {
+        console.error("Failed to remove clip from library:", err);
+      }
+    }
+  }
+
   // ── Render ────────────────────────────────────────────────────────────────────
   if (appRoot === undefined) {
     return null;
@@ -327,15 +371,25 @@ function App() {
           <ul className="library-list">
             {library.map(entry => (
               <li
-                key={entry.path}
+                key={entry.id}
                 className={`library-item${entry.path === path ? " active" : ""}`}
                 onClick={() => openClip(entry.path)}
                 title={entry.path}
               >
-                <span className="library-name">{basename(entry.path)}</span>
-                <span className="library-meta">
-                  {entry.meta.durationSecs.toFixed(1)}s · {entry.meta.width}×{entry.meta.height}
-                </span>
+                <div className="library-item-text">
+                  <span className="library-name">{entry.displayName}</span>
+                  <span className="library-meta">
+                    {entry.durationSecs.toFixed(1)}s · {entry.width}×{entry.height}
+                  </span>
+                </div>
+                <button
+                  className="library-remove"
+                  title="Remove from library (keeps the file)"
+                  aria-label="Remove from library"
+                  onClick={e => removeFromLibraryClick(e, entry)}
+                >
+                  ×
+                </button>
               </li>
             ))}
           </ul>
