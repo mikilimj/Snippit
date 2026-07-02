@@ -203,6 +203,50 @@ pub fn rename_clip(conn: &Connection, id: i64, display_name: &str) -> Result<(),
     Ok(())
 }
 
+/// Updates a single clip's stored path after its file was moved on disk (spec
+/// §4.7 cross-volume move). No-op if no clip currently has `old_path`.
+pub fn relink_clip_path(conn: &Connection, old_path: &str, new_path: &str) -> Result<(), String> {
+    conn.execute(
+        "UPDATE clips SET path = ?1 WHERE path = ?2",
+        params![new_path, old_path],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Re-homes every clip whose path lies under `old_prefix` to the same relative
+/// location under `new_prefix` (spec §4.7 same-volume folder rename). Returns how
+/// many rows were rewritten. Matching is by path prefix, done in Rust to avoid
+/// SQL `LIKE` metacharacter pitfalls in real filesystem paths.
+pub fn relink_clip_prefix(
+    conn: &Connection,
+    old_prefix: &str,
+    new_prefix: &str,
+) -> Result<usize, String> {
+    let mut stmt = conn
+        .prepare("SELECT id, path FROM clips")
+        .map_err(|e| e.to_string())?;
+    let rows: Vec<(i64, String)> = stmt
+        .query_map([], |row| Ok((row.get(0)?, row.get::<_, String>(1)?)))
+        .map_err(|e| e.to_string())?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|e| e.to_string())?;
+
+    let mut changed = 0;
+    for (id, path) in rows {
+        if let Some(rest) = path.strip_prefix(old_prefix) {
+            let new_path = format!("{new_prefix}{rest}");
+            conn.execute(
+                "UPDATE clips SET path = ?1 WHERE id = ?2",
+                params![new_path, id],
+            )
+            .map_err(|e| e.to_string())?;
+            changed += 1;
+        }
+    }
+    Ok(changed)
+}
+
 /// Creates a new virtual folder and returns it. Fails if the name is already
 /// taken (folder names are unique).
 pub fn create_folder(conn: &Connection, name: &str) -> Result<Folder, String> {
@@ -520,5 +564,31 @@ mod tests {
         remove_clip(&conn, a.id).unwrap();
         // No orphaned membership rows left pointing at the deleted clip.
         assert_eq!(list_clips_in_folder(&conn, folder.id).unwrap().len(), 0);
+    }
+
+    #[test]
+    fn relink_clip_path_updates_a_single_clips_location() {
+        let conn = mem_db();
+        upsert_clip(&conn, "/old/a.mp4", &sample_meta(), None).unwrap();
+        upsert_clip(&conn, "/old/b.mp4", &sample_meta(), None).unwrap();
+        relink_clip_path(&conn, "/old/a.mp4", "/new/a.mp4").unwrap();
+        let paths: Vec<String> = list_clips(&conn).unwrap().into_iter().map(|c| c.path).collect();
+        assert!(paths.contains(&"/new/a.mp4".to_string()));
+        assert!(paths.contains(&"/old/b.mp4".to_string())); // untouched
+        assert!(!paths.contains(&"/old/a.mp4".to_string()));
+    }
+
+    #[test]
+    fn relink_clip_prefix_rehomes_every_clip_under_a_moved_root() {
+        let conn = mem_db();
+        upsert_clip(&conn, "/old/root/a.mp4", &sample_meta(), None).unwrap();
+        upsert_clip(&conn, "/old/root/sub/b.mp4", &sample_meta(), None).unwrap();
+        upsert_clip(&conn, "/elsewhere/c.mp4", &sample_meta(), None).unwrap();
+        let n = relink_clip_prefix(&conn, "/old/root", "/new/place").unwrap();
+        assert_eq!(n, 2); // only the two under the old root
+        let paths: Vec<String> = list_clips(&conn).unwrap().into_iter().map(|c| c.path).collect();
+        assert!(paths.contains(&"/new/place/a.mp4".to_string()));
+        assert!(paths.contains(&"/new/place/sub/b.mp4".to_string()));
+        assert!(paths.contains(&"/elsewhere/c.mp4".to_string())); // outside the root, untouched
     }
 }

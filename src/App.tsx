@@ -11,6 +11,7 @@ import { isCustomSelectionValid, resolveTargetMb, TARGET_SIZE_PRESETS } from "./
 import { setIn, setOut } from "./trim";
 import { Timeline } from "./Timeline";
 import { FirstRunWizard } from "./FirstRunWizard";
+import { SettingsModal } from "./SettingsModal";
 import logo from "./assets/logo.png";
 import "./App.css";
 
@@ -47,6 +48,7 @@ function App() {
   // Light timeline (spec §4.3): an ordered list of trimmed segments + optional music.
   const [segments, setSegments] = useState<SequenceSegment[]>([]);
   const [music, setMusic] = useState<MusicOverlay | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   // `undefined` = still checking, `null` = needs first-run setup, string = configured root
   const [appRoot, setAppRoot] = useState<string | null | undefined>(undefined);
 
@@ -627,6 +629,7 @@ function App() {
 
   return (
     <div className="app-layout">
+      {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
       {/* Library sidebar */}
       <aside className="library-panel">
         <div className="brand-row">
@@ -642,6 +645,9 @@ function App() {
               onClick={() => rescanLibrary().catch(err => console.error("Rescan failed:", err))}
             >
               ⟳
+            </button>
+            <button className="btn-sm" title="Settings" onClick={() => setSettingsOpen(true)}>
+              ⚙
             </button>
             <button className="btn-sm" onClick={pickClip}>+ Open</button>
           </div>

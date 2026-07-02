@@ -3,6 +3,7 @@ pub mod export;
 pub mod setup;
 pub mod library;
 pub mod media;
+pub mod relocate;
 pub mod watcher;
 mod media_server;
 
@@ -114,13 +115,18 @@ struct ExportJob {
     cancelled: AtomicBool,
 }
 
-/// Progress event streamed to the UI while an export runs (spec §4.5).
+/// Progress event streamed to the UI while an export runs (spec §4.5). Reused by
+/// the folder relocation job (spec §4.7) via the `relocate-progress` event.
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ExportProgress {
     fraction: f64,
     phase: String,
 }
+
+/// Cancel flag for the single in-flight folder relocation (spec §4.7).
+#[derive(Default)]
+struct RelocateJob(AtomicBool);
 
 /// Outcome of one ffmpeg run under progress/cancel supervision.
 enum RunOutcome {
@@ -339,6 +345,108 @@ async fn export_sequence(
         RunOutcome::Done => Ok(output),
         RunOutcome::Cancelled => Err("Export cancelled.".to_string()),
     }
+}
+
+/// The watched-mode source folder (spec §4.7), or None when there's nothing
+/// relocatable (empty/import mode, or setup incomplete).
+#[tauri::command]
+fn get_watched_folder(app: tauri::AppHandle) -> Option<String> {
+    let config_dir = app.path().app_config_dir().ok()?;
+    let root = setup::read_pointer_file(&config_dir)?;
+    let settings = setup::read_settings(std::path::Path::new(&root))?;
+    if settings.ingestion_mode == "watch" {
+        settings.source_folder
+    } else {
+        None
+    }
+}
+
+/// Requests cancellation of the running folder relocation. Safe at any point —
+/// every file is either fully moved or untouched (spec §4.7).
+#[tauri::command]
+fn cancel_relocate(app: tauri::AppHandle) {
+    app.state::<RelocateJob>().0.store(true, Ordering::SeqCst);
+}
+
+/// Moves the watched source folder to `dest` (spec §4.7): an atomic rename on the
+/// same volume, else a crash-safe file-by-file copy, keeping the index in sync.
+/// Emits `relocate-progress`; updates the watched-folder setting on success (the
+/// live watcher re-targets on next launch).
+#[tauri::command]
+async fn relocate_watched_folder(app: tauri::AppHandle, dest: String) -> Result<String, String> {
+    let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    let root = setup::read_pointer_file(&config_dir)
+        .ok_or_else(|| "Library is not set up yet".to_string())?;
+    let root_path = std::path::PathBuf::from(&root);
+    let settings =
+        setup::read_settings(&root_path).ok_or_else(|| "No settings found.".to_string())?;
+    if settings.ingestion_mode != "watch" {
+        return Err("Only a watch-mode source folder can be relocated.".to_string());
+    }
+    let src = settings
+        .source_folder
+        .clone()
+        .ok_or_else(|| "There is no watched folder to move.".to_string())?;
+    if dest == src {
+        return Err("The destination is the same as the current folder.".to_string());
+    }
+    let src_p = PathBuf::from(&src);
+    let dest_p = PathBuf::from(&dest);
+    if !src_p.exists() {
+        return Err(format!("The source folder {src} no longer exists."));
+    }
+    if dest_p.starts_with(&src_p) {
+        return Err("Cannot move a folder into itself.".to_string());
+    }
+
+    app.state::<RelocateJob>().0.store(false, Ordering::SeqCst);
+    let fanout = if relocate::same_volume(&src_p, dest_p.parent().unwrap_or(&dest_p)) {
+        relocate::Fanout::Rename
+    } else {
+        relocate::Fanout::CopyPerFile
+    };
+
+    let app2 = app.clone();
+    let src_run = src_p.clone();
+    let dest_run = dest_p.clone();
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
+        let conn = open_library(&app2)?;
+        relocate::relocate_folder(
+            &conn,
+            &src_run,
+            &dest_run,
+            fanout,
+            &|| app2.state::<RelocateJob>().0.load(Ordering::SeqCst),
+            &mut |done, total, cur| {
+                let fraction = if total == 0 { 1.0 } else { done as f64 / total as f64 };
+                let _ = app2.emit(
+                    "relocate-progress",
+                    ExportProgress {
+                        fraction,
+                        phase: format!(
+                            "Moving {}",
+                            cur.file_name().and_then(|n| n.to_str()).unwrap_or("…")
+                        ),
+                    },
+                );
+            },
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    if matches!(outcome, relocate::Outcome::Cancelled) {
+        return Err("Move cancelled.".to_string());
+    }
+
+    // Re-point the watched-folder setting at the new location.
+    let updated = setup::SetupSettings {
+        ingestion_mode: settings.ingestion_mode,
+        source_folder: Some(dest.clone()),
+        created_at: settings.created_at,
+    };
+    setup::write_settings(&root_path, &updated)?;
+    Ok(dest)
 }
 
 /// Opens the library database that lives inside the configured app root
@@ -734,6 +842,7 @@ pub fn run() {
             app.manage(WatchStarted(AtomicBool::new(false)));
             app.manage(InFlight(Arc::new(Mutex::new(HashSet::new()))));
             app.manage(ExportJob::default());
+            app.manage(RelocateJob::default());
             // Start auto-import if already configured; a first-run launch starts
             // it from complete_setup instead.
             start_watching(app.handle());
@@ -764,7 +873,10 @@ pub fn run() {
             remove_clip_from_folder,
             list_clips_in_folder,
             list_unsorted_library,
-            ensure_proxy
+            ensure_proxy,
+            get_watched_folder,
+            relocate_watched_folder,
+            cancel_relocate
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
