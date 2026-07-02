@@ -2,8 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { probeClip, exportTrim, exportCompressed, prepareAudioTracks, getAppRoot, addToLibrary, listLibrary, removeFromLibrary, rescanLibrary, setClipFavorite, renameLibraryClip, createFolder, listFolders, deleteFolder, addClipToFolder, removeClipFromFolder, listClipsInFolder, listUnsortedLibrary, type ClipMeta, type ClipRow, type Folder, type TrackConfig, type SetupResult } from "./api";
+import { probeClip, exportTrim, exportCompressed, prepareAudioTracks, getAppRoot, addToLibrary, listLibrary, removeFromLibrary, rescanLibrary, setClipFavorite, renameLibraryClip, createFolder, listFolders, deleteFolder, addClipToFolder, removeClipFromFolder, listClipsInFolder, listUnsortedLibrary, ensureProxy, type ClipMeta, type ClipRow, type Folder, type TrackConfig, type SetupResult } from "./api";
 import { newClipBelongsInView, applyFavorite, applyRename, type LibraryView } from "./libraryView";
+import { previewPath, shouldTryProxy } from "./preview";
 import { isCustomSelectionValid, resolveTargetMb, TARGET_SIZE_PRESETS } from "./exportOptions";
 import { setIn, setOut } from "./trim";
 import { Timeline } from "./Timeline";
@@ -20,6 +21,9 @@ function App() {
   const [meta, setMeta] = useState<ClipMeta | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [videoError, setVideoError] = useState<string | null>(null);
+  // Preview proxy (spec §4.4): set when the WebView can't decode the original.
+  const [proxyPath, setProxyPath] = useState<string | null>(null);
+  const [proxyStatus, setProxyStatus] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const [inPoint, setInPoint] = useState<number | null>(null);
   const [outPoint, setOutPoint] = useState<number | null>(null);
@@ -230,6 +234,30 @@ function App() {
     audioElsRef.current.forEach(a => { a.currentTime = v.currentTime; });
   }
 
+  // Native-first, proxy-fallback (spec §4.4): if the WebView can't decode the
+  // original, transcode a 720p H.264 proxy in the background and switch to it.
+  // If the proxy itself fails, surface the error instead of looping.
+  function handleVideoError(e: React.SyntheticEvent<HTMLVideoElement>) {
+    const err = e.currentTarget.error;
+    if (path && shouldTryProxy(proxyPath)) {
+      setVideoError(null);
+      setProxyStatus("This format won't play natively — building a compatible preview…");
+      ensureProxy(path)
+        .then(pp => {
+          setProxyPath(pp);
+          setProxyStatus(null);
+        })
+        .catch(genErr => {
+          setProxyStatus(null);
+          setVideoError(`Couldn't build a preview: ${genErr}`);
+        });
+      return;
+    }
+    setVideoError(
+      `Playback error (code ${err?.code ?? "?"}): ${err?.message || "unsupported or inaccessible file"}`
+    );
+  }
+
   // ── Per-track config update: applies immediately to the gain node ─────────────
   function updateTrackConfig(i: number, patch: Partial<TrackConfig>) {
     setTrackConfigs(prev => {
@@ -305,6 +333,8 @@ function App() {
   async function openClip(p: string) {
     setError(null);
     setVideoError(null);
+    setProxyPath(null);
+    setProxyStatus(null);
     setPath(p);
     setInPoint(null);
     setOutPoint(null);
@@ -743,10 +773,11 @@ function App() {
 
         {path && (
           <>
-            {/* Video: muted once Web Audio takes over */}
+            {/* Video: original first, proxy fallback (§4.4); muted once Web Audio takes over */}
             <video
               ref={videoRef}
-              src={mediaPort ? `http://127.0.0.1:${mediaPort}/file?path=${encodeURIComponent(path)}` : undefined}
+              key={previewPath(path, proxyPath)}
+              src={mediaPort ? `http://127.0.0.1:${mediaPort}/file?path=${encodeURIComponent(previewPath(path, proxyPath))}` : undefined}
               controls
               muted={audioReady}
               className="video-player"
@@ -755,13 +786,20 @@ function App() {
               onPause={onVideoPause}
               onSeeked={onVideoSeeked}
               onVolumeChange={onVideoVolumeChange}
-              onError={e => {
-                const err = (e.currentTarget as HTMLVideoElement).error;
-                setVideoError(
-                  `Playback error (code ${err?.code ?? "?"}): ${err?.message || "unsupported or inaccessible file"}`
-                );
-              }}
+              onError={handleVideoError}
             />
+
+            {proxyStatus && (
+              <div className="msg-warn" data-testid="proxy-status">
+                {proxyStatus}
+              </div>
+            )}
+
+            {proxyPath && !proxyStatus && (
+              <div className="msg-ok">
+                Playing a 720p preview proxy. Export still uses the full-quality original.
+              </div>
+            )}
 
             {videoError && (
               <div className="msg-warn">
