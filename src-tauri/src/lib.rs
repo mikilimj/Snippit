@@ -276,6 +276,26 @@ fn list_unsorted_library(app: tauri::AppHandle) -> Result<Vec<library::ClipRow>,
     library::list_unsorted_clips(&conn)
 }
 
+/// Returns a preview proxy for `path`, generating a cached 720p H.264 MP4 if one
+/// doesn't already exist (spec §4.4). Called by the UI only when the WebView
+/// can't play the original natively; the original is still used for export.
+#[tauri::command]
+async fn ensure_proxy(app: tauri::AppHandle, path: String) -> Result<String, String> {
+    let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    let root = setup::read_pointer_file(&config_dir)
+        .ok_or_else(|| "Library is not set up yet".to_string())?;
+    let cache = std::path::Path::new(&root).join("Cache").join("proxies");
+    let _ = std::fs::create_dir_all(&cache);
+    let mtime = file_mtime_unix(std::path::Path::new(&path));
+    let proxy = media::proxy_path(&cache, &path, mtime);
+    let proxy_str = proxy.to_string_lossy().to_string();
+    if proxy.exists() {
+        return Ok(proxy_str); // reuse the cached proxy
+    }
+    generate_proxy(&app, &path, &proxy_str).await?;
+    Ok(proxy_str)
+}
+
 #[tauri::command]
 fn get_app_root(app: tauri::AppHandle) -> Result<Option<String>, String> {
     let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
@@ -329,6 +349,23 @@ async fn generate_thumbnail(
     at_secs: f64,
 ) -> Result<(), String> {
     let args = media::build_thumbnail_args(source, out, at_secs, 320);
+    let result = app
+        .shell()
+        .sidecar("ffmpeg")
+        .map_err(|e| e.to_string())?
+        .args(args)
+        .output()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !result.status.success() {
+        return Err(String::from_utf8_lossy(&result.stderr).to_string());
+    }
+    Ok(())
+}
+
+/// Transcodes `source` into a 720p H.264 preview proxy at `out` (spec §4.4).
+async fn generate_proxy(app: &tauri::AppHandle, source: &str, out: &str) -> Result<(), String> {
+    let args = media::build_proxy_args(source, out);
     let result = app
         .shell()
         .sidecar("ffmpeg")
@@ -566,7 +603,8 @@ pub fn run() {
             add_clip_to_folder,
             remove_clip_from_folder,
             list_clips_in_folder,
-            list_unsorted_library
+            list_unsorted_library,
+            ensure_proxy
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

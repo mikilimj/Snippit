@@ -26,6 +26,15 @@ export function probeClip(path: string): Promise<ClipMeta> {
   return invoke<ClipMeta>("probe_clip", { path });
 }
 
+/**
+ * Ensure a 720p H.264 preview proxy exists for a clip the WebView can't play
+ * natively, returning its file path (spec §4.4). Cached by source + mtime; the
+ * original is always used for export.
+ */
+export function ensureProxy(path: string): Promise<string> {
+  return invoke<string>("ensure_proxy", { path });
+}
+
 /** A persisted library row (SQLite index). Mirrors Rust `library::ClipRow`. */
 export interface ClipRow {
   id: number;
