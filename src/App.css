@@ -237,6 +237,39 @@ html, body, #root {
   font-variant-numeric: tabular-nums;
 }
 
+/* ─── Export size picker ────────────────────────────────────────────────────── */
+.export-size {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.export-size-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #666;
+}
+
+.export-size-select,
+.export-size-custom {
+  border-radius: 5px;
+  border: 1px solid #3a3a3a;
+  padding: 5px 8px;
+  font-size: 13px;
+  font-family: inherit;
+  color: #d0d0d0;
+  background: #2a2a2a;
+  cursor: pointer;
+}
+.export-size-select:hover,
+.export-size-custom:hover { border-color: #4a8fc0; }
+.export-size-select:focus,
+.export-size-custom:focus { outline: none; border-color: #4a8fc0; }
+
+.export-size-custom { width: 70px; cursor: text; }
+
 /* ─── Buttons ───────────────────────────────────────────────────────────────── */
 button {
   border-radius: 5px;
@@ -425,6 +458,12 @@ button:focus  { outline: none; }
 
   button           { color: #111; background: #fff; border-color: #bbb; }
   button:hover     { border-color: #3a80c0; background: #f0f0f0; }
+
+  .export-size-label { color: #999; }
+  .export-size-select,
+  .export-size-custom { color: #111; background: #fff; border-color: #bbb; }
+  .export-size-select:hover,
+  .export-size-custom:hover { border-color: #3a80c0; }
 
   .btn-export      { background: #d0e8ff; border-color: #80b0e0; color: #1a3e6a; }
   .btn-export:hover { background: #c0d8f8; }
