@@ -6,6 +6,7 @@ import { isCustomSelectionValid, resolveTargetMb, TARGET_SIZE_PRESETS } from "./
 import { setIn, setOut } from "./trim";
 import { Timeline } from "./Timeline";
 import { FirstRunWizard } from "./FirstRunWizard";
+import logo from "./assets/logo.png";
 import "./App.css";
 
 interface LibraryEntry {
@@ -310,6 +311,10 @@ function App() {
     <div className="app-layout">
       {/* Library sidebar */}
       <aside className="library-panel">
+        <div className="brand-row">
+          <img className="brand-logo" src={logo} alt="" />
+          <span className="brand-name">ClipSnip</span>
+        </div>
         <div className="library-header">
           <span className="library-title">Library</span>
           <button className="btn-sm" onClick={pickClip}>+ Open</button>
@@ -339,9 +344,15 @@ function App() {
       <main className="editor-panel">
         {!path && (
           <div className="empty-state">
-            <h1>ClipSnip</h1>
-            <p>Pick a video clip to start trimming.</p>
-            <button onClick={pickClip}>Open clip…</button>
+            <div className="aurora-blob aurora-blob-1" />
+            <div className="aurora-blob aurora-blob-2" />
+            <div className="aurora-blob aurora-blob-3" />
+            <div className="empty-card">
+              <img className="empty-logo" src={logo} alt="" />
+              <h1>ClipSnip</h1>
+              <p>Open a clip, trim it, share it — in seconds.</p>
+              <button className="btn-export" onClick={pickClip}>Open a clip</button>
+            </div>
           </div>
         )}
 
