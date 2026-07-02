@@ -7,8 +7,8 @@ pub mod watcher;
 mod media_server;
 
 use export::{
-    build_compress_pass_args, build_trim_args, build_trim_compatible_args, compute_target_bitrates,
-    parse_progress_line, validate_trim, TrackConfig,
+    build_compress_pass_args, build_sequence_args, build_trim_args, build_trim_compatible_args,
+    compute_target_bitrates, parse_progress_line, validate_trim, MusicOverlay, Segment, TrackConfig,
 };
 use probe::{parse_ffprobe_json, ClipMeta};
 use serde::Serialize;
@@ -294,6 +294,48 @@ async fn export_compressed(
     }
 
     match outcome? {
+        RunOutcome::Done => Ok(output),
+        RunOutcome::Cancelled => Err("Export cancelled.".to_string()),
+    }
+}
+
+/// Stitches an ordered list of trimmed segments into one clip, optionally mixing
+/// in a music overlay (spec §4.3). The output resolution is taken from the first
+/// segment; the whole job re-encodes to H.264/AAC. Progress/cancel as per §4.5.
+#[tauri::command]
+async fn export_sequence(
+    app: tauri::AppHandle,
+    segments: Vec<Segment>,
+    music: Option<MusicOverlay>,
+    output: String,
+) -> Result<String, String> {
+    if segments.is_empty() {
+        return Err("Add at least one clip to the sequence first.".to_string());
+    }
+    let mut total = 0.0;
+    for s in &segments {
+        if s.in_secs >= s.out_secs {
+            return Err(format!("Segment '{}' has an invalid in/out range.", s.input));
+        }
+        if output == s.input {
+            return Err("Output path must differ from every source clip.".to_string());
+        }
+        total += s.out_secs - s.in_secs;
+    }
+    if let Some(m) = &music {
+        if output == m.path {
+            return Err("Output path must differ from the music file.".to_string());
+        }
+    }
+
+    // The first segment sets the target frame; the rest are letterboxed to it.
+    let first = probe_path(&app, &segments[0].input).await?;
+
+    app.state::<ExportJob>()
+        .cancelled
+        .store(false, Ordering::SeqCst);
+    let args = build_sequence_args(&segments, first.width, first.height, music.as_ref(), &output);
+    match run_ffmpeg_with_progress(&app, args, total, "Stitching", 0.0, 1.0).await? {
         RunOutcome::Done => Ok(output),
         RunOutcome::Cancelled => Err("Export cancelled.".to_string()),
     }
@@ -701,6 +743,7 @@ pub fn run() {
             probe_clip,
             export_trim,
             export_compressed,
+            export_sequence,
             cancel_export,
             get_media_port,
             prepare_audio_tracks,

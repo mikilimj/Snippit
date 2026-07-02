@@ -175,6 +175,29 @@ export function exportCompressed(
   });
 }
 
+/** One trimmed clip in a stitched sequence. Mirrors Rust `export::Segment`. */
+export interface Segment {
+  input: string;
+  inSecs: number;
+  outSecs: number;
+}
+
+/** A music bed mixed over a sequence. Mirrors Rust `export::MusicOverlay`. */
+export interface MusicOverlay {
+  path: string;
+  volume: number; // 0.0–2.0
+  loopToLength: boolean;
+}
+
+/** Stitch trimmed segments (+ optional music) into one H.264/AAC MP4 (spec §4.3). */
+export function exportSequence(
+  segments: Segment[],
+  music: MusicOverlay | null,
+  output: string,
+): Promise<string> {
+  return invoke<string>("export_sequence", { segments, music, output });
+}
+
 export interface SetupResult {
   rootPath: string;
   warnings: string[];
