@@ -1,5 +1,6 @@
 mod probe;
 pub mod export;
+pub mod setup;
 mod media_server;
 
 use export::{build_compress_pass_args, build_trim_args, compute_target_bitrates, validate_trim, TrackConfig};
@@ -185,7 +186,11 @@ pub fn run() {
             export_trim,
             export_compressed,
             get_media_port,
-            prepare_audio_tracks
+            prepare_audio_tracks,
+            get_app_root,
+            check_root_dir_status,
+            check_path_writable,
+            complete_setup
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
