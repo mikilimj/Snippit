@@ -202,6 +202,16 @@ fn complete_setup(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // WebKitGTK's DMABUF/EGL renderer fails to create an EGL display inside our
+    // AppImage (its bundled libEGL/Mesa is older than the host driver), which
+    // aborts the web process and leaves a blank gray window. Disable that
+    // renderer only for AppImage runs so native/deb builds keep GPU-accelerated
+    // rendering. The APPIMAGE env var is set by the AppImage runtime.
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("APPIMAGE").is_some() {
+        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    }
+
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
