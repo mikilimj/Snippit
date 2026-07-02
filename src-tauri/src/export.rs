@@ -106,6 +106,163 @@ pub fn validate_trim(source: &str, output: &str, in_secs: f64, out_secs: f64) ->
     Ok(())
 }
 
+// ── Target-size compression (design spec §4.5) ────────────────────────────────────
+
+/// Below this the picture is unusable at any resolution a game clip ships in.
+pub const MIN_VIDEO_KBPS: u32 = 100;
+
+/// Fraction of the target reserved for container overhead and rate-control drift.
+const SIZE_SAFETY: f64 = 0.97;
+
+/// Split a target file size into (video_kbps, audio_kbps) for a two-pass encode.
+///
+/// `target_total_bits = target_mb × 8 × 1024 × 1024 × safety`; audio gets a fixed
+/// bitrate (stepped down for tight budgets) and video gets the remainder. Errors
+/// when the remainder falls below MIN_VIDEO_KBPS — the pre-flight warning from the
+/// design spec — so the user can shorten the clip or pick a larger target instead
+/// of burning a two-pass encode on an unwatchable file.
+pub fn compute_target_bitrates(target_mb: f64, duration_secs: f64) -> Result<(u32, u32), String> {
+    if target_mb <= 0.0 {
+        return Err("Target size must be greater than zero.".into());
+    }
+    if duration_secs <= 0.0 {
+        return Err("Clip duration must be greater than zero.".into());
+    }
+    let total_kbps = target_mb * 8.0 * 1024.0 * 1024.0 * SIZE_SAFETY / 1000.0 / duration_secs;
+    let audio_kbps: u32 = if total_kbps >= 512.0 {
+        128
+    } else if total_kbps >= 256.0 {
+        96
+    } else {
+        64
+    };
+    let video_kbps = total_kbps - audio_kbps as f64;
+    if video_kbps < MIN_VIDEO_KBPS as f64 {
+        return Err(format!(
+            "{target_mb} MB is too small for a {duration_secs:.1}s clip — video would drop below {MIN_VIDEO_KBPS} kbps. Shorten the clip or choose a bigger target."
+        ));
+    }
+    Ok((video_kbps.floor() as u32, audio_kbps))
+}
+
+fn null_sink() -> &'static str {
+    if cfg!(windows) {
+        "NUL"
+    } else {
+        "/dev/null"
+    }
+}
+
+/// Build ffmpeg args for one pass of a two-pass H.264/AAC target-size encode.
+///
+/// Pass 1 analyzes only (video discarded to the OS null sink, audio dropped);
+/// pass 2 encodes the real output, applying the same per-track audio semantics
+/// as `build_trim_args` except audio is always re-encoded to AAC — stream copy
+/// can't hit a bitrate target.
+pub fn build_compress_pass_args(
+    input: &str,
+    in_secs: f64,
+    out_secs: f64,
+    output: &str,
+    tracks: &[TrackConfig],
+    video_kbps: u32,
+    audio_kbps: u32,
+    pass: u8,
+    passlog: &str,
+) -> Vec<String> {
+    let duration = out_secs - in_secs;
+    let mut args = vec![
+        "-y".to_string(),
+        "-ss".to_string(),
+        format!("{:.3}", in_secs),
+        "-i".to_string(),
+        input.to_string(),
+        "-t".to_string(),
+        format!("{:.3}", duration),
+    ];
+
+    let enabled: Vec<&TrackConfig> = tracks.iter().filter(|t| t.enabled).collect();
+
+    if pass == 1 {
+        args.extend([
+            "-map".to_string(),
+            "0:v:0".to_string(),
+            "-c:v".to_string(),
+            "libx264".to_string(),
+            "-b:v".to_string(),
+            format!("{video_kbps}k"),
+            "-preset".to_string(),
+            "medium".to_string(),
+            "-pass".to_string(),
+            "1".to_string(),
+            "-passlogfile".to_string(),
+            passlog.to_string(),
+            "-an".to_string(),
+            "-f".to_string(),
+            "mp4".to_string(),
+            null_sink().to_string(),
+        ]);
+        return args;
+    }
+
+    // Pass 2: audio mapping mirrors build_trim_args' mix/single-track semantics.
+    let needs_mix = enabled.len() > 1
+        || (enabled.len() == 1 && (enabled[0].volume - 1.0).abs() >= 0.001);
+    if needs_mix {
+        args.extend([
+            "-filter_complex".to_string(),
+            amix_filter(&enabled),
+            "-map".to_string(),
+            "0:v:0".to_string(),
+            "-map".to_string(),
+            "[aout]".to_string(),
+        ]);
+    } else if enabled.len() == 1 {
+        args.extend([
+            "-map".to_string(),
+            "0:v:0".to_string(),
+            "-map".to_string(),
+            format!("0:{}", enabled[0].stream_index),
+        ]);
+    } else if !tracks.is_empty() {
+        // Tracks were configured but every one is muted → video only.
+        args.extend(["-map".to_string(), "0:v:0".to_string()]);
+    }
+    // (empty `tracks` = clip with no audio config → let ffmpeg pick defaults)
+
+    args.extend([
+        "-c:v".to_string(),
+        "libx264".to_string(),
+        "-b:v".to_string(),
+        format!("{video_kbps}k"),
+        "-preset".to_string(),
+        "medium".to_string(),
+        "-pass".to_string(),
+        "2".to_string(),
+        "-passlogfile".to_string(),
+        passlog.to_string(),
+    ]);
+
+    let audio_silenced = !tracks.is_empty() && enabled.is_empty();
+    if audio_silenced {
+        args.push("-an".to_string());
+    } else {
+        args.extend([
+            "-c:a".to_string(),
+            "aac".to_string(),
+            "-b:a".to_string(),
+            format!("{audio_kbps}k"),
+        ]);
+    }
+
+    args.extend([
+        "-movflags".to_string(),
+        "+faststart".to_string(),
+        output.to_string(),
+    ]);
+    args
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -199,5 +356,89 @@ mod tests {
     #[test]
     fn validate_trim_accepts_valid_distinct_ordered_span() {
         assert!(validate_trim("in.mp4", "out.mp4", 1.0, 3.5).is_ok());
+    }
+
+    // ── Target-size compression ──────────────────────────────────────────────────
+
+    #[test]
+    fn compute_target_bitrates_splits_budget_between_video_and_audio() {
+        // 10 MB over 60s: total ≈ 1356 kbps → 128k audio, remainder to video.
+        let (v, a) = compute_target_bitrates(10.0, 60.0).unwrap();
+        assert_eq!(a, 128);
+        assert!((1200..=1240).contains(&v), "video kbps out of range: {v}");
+    }
+
+    #[test]
+    fn compute_target_bitrates_steps_audio_down_for_tight_budgets() {
+        // 8 MB over 300s: total ≈ 217 kbps → audio must drop to 64k.
+        let (v, a) = compute_target_bitrates(8.0, 300.0).unwrap();
+        assert_eq!(a, 64);
+        assert!(v >= MIN_VIDEO_KBPS);
+    }
+
+    #[test]
+    fn compute_target_bitrates_errors_below_video_floor() {
+        // 8 MB over an hour is hopeless — must refuse, not encode garbage.
+        let err = compute_target_bitrates(8.0, 3600.0).unwrap_err();
+        assert!(err.contains("too small"), "unexpected message: {err}");
+    }
+
+    #[test]
+    fn compute_target_bitrates_rejects_non_positive_inputs() {
+        assert!(compute_target_bitrates(0.0, 60.0).is_err());
+        assert!(compute_target_bitrates(10.0, 0.0).is_err());
+    }
+
+    #[test]
+    fn compress_pass1_analyzes_video_only_into_null_sink() {
+        let tracks = vec![TrackConfig { stream_index: 1, enabled: true, volume: 1.0 }];
+        let args =
+            build_compress_pass_args("in.mp4", 1.0, 11.0, "out.mp4", &tracks, 1200, 128, 1, "/tmp/log");
+        assert!(args.contains(&"-pass".to_string()));
+        let p = args.iter().position(|a| a == "-pass").unwrap();
+        assert_eq!(args[p + 1], "1");
+        assert!(args.contains(&"-an".to_string()));
+        assert!(args.contains(&"1200k".to_string()));
+        assert!(!args.contains(&"out.mp4".to_string()));
+        assert!(args.last().unwrap() == "/dev/null" || args.last().unwrap() == "NUL");
+    }
+
+    #[test]
+    fn compress_pass2_single_unity_track_maps_stream_and_reencodes_aac() {
+        let tracks = vec![TrackConfig { stream_index: 1, enabled: true, volume: 1.0 }];
+        let args =
+            build_compress_pass_args("in.mp4", 1.0, 11.0, "out.mp4", &tracks, 1200, 128, 2, "/tmp/log");
+        assert!(args.contains(&"0:1".to_string()));
+        assert!(!args.contains(&"-filter_complex".to_string()));
+        assert!(args.contains(&"aac".to_string()));
+        assert!(args.contains(&"128k".to_string()));
+        assert!(args.contains(&"+faststart".to_string()));
+        assert_eq!(args.last().unwrap(), "out.mp4");
+        // Video must be re-encoded to hit the target — never stream-copied.
+        assert!(args.contains(&"libx264".to_string()));
+        assert!(!args.windows(2).any(|w| w[0] == "-c:v" && w[1] == "copy"));
+    }
+
+    #[test]
+    fn compress_pass2_multiple_tracks_use_amix() {
+        let tracks = vec![
+            TrackConfig { stream_index: 1, enabled: true, volume: 1.0 },
+            TrackConfig { stream_index: 2, enabled: true, volume: 0.5 },
+        ];
+        let args =
+            build_compress_pass_args("in.mp4", 0.0, 10.0, "out.mp4", &tracks, 900, 96, 2, "/tmp/log");
+        let fc = args.iter().position(|a| a == "-filter_complex").unwrap();
+        assert!(args[fc + 1].contains("amix=inputs=2"));
+        assert!(args.contains(&"[aout]".to_string()));
+        assert!(args.contains(&"96k".to_string()));
+    }
+
+    #[test]
+    fn compress_pass2_all_tracks_muted_drops_audio() {
+        let tracks = vec![TrackConfig { stream_index: 1, enabled: false, volume: 1.0 }];
+        let args =
+            build_compress_pass_args("in.mp4", 0.0, 10.0, "out.mp4", &tracks, 900, 128, 2, "/tmp/log");
+        assert!(args.contains(&"-an".to_string()));
+        assert!(!args.contains(&"aac".to_string()));
     }
 }

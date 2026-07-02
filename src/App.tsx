@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { probeClip, exportTrim, prepareAudioTracks, type ClipMeta, type TrackConfig } from "./api";
+import { probeClip, exportTrim, exportCompressed, prepareAudioTracks, type ClipMeta, type TrackConfig } from "./api";
+import { isCustomSelectionValid, resolveTargetMb, TARGET_SIZE_PRESETS } from "./exportOptions";
 import { setIn, setOut } from "./trim";
 import { Timeline } from "./Timeline";
 import "./App.css";
@@ -27,6 +28,8 @@ function App() {
   const [currentTime, setCurrentTime] = useState(0);
   const [library, setLibrary] = useState<LibraryEntry[]>([]);
   const [mediaPort, setMediaPort] = useState<number | null>(null);
+  const [sizeSelection, setSizeSelection] = useState("original");
+  const [customMb, setCustomMb] = useState("");
 
   // ── Multi-track audio state ──────────────────────────────────────────────────
   const [trackConfigs, setTrackConfigs] = useState<TrackConfig[]>([]);
@@ -199,11 +202,21 @@ function App() {
       setStatus("Set In and Out first.");
       return;
     }
+    if (!isCustomSelectionValid(sizeSelection, customMb)) {
+      setStatus("Enter a valid custom size in MB first.");
+      return;
+    }
+    const targetMb = resolveTargetMb(sizeSelection, customMb);
     const dest = await save({ defaultPath: "clip-trimmed.mp4" });
     if (!dest) return;
-    setStatus("Exporting…");
+    setStatus(
+      targetMb === null ? "Exporting…" : `Compressing to ${targetMb} MB (two-pass encode)…`
+    );
     try {
-      const out = await exportTrim(path, inPoint, outPoint, dest, trackConfigs);
+      const out =
+        targetMb === null
+          ? await exportTrim(path, inPoint, outPoint, dest, trackConfigs)
+          : await exportCompressed(path, inPoint, outPoint, dest, trackConfigs, targetMb);
       setStatus(`Exported: ${out}`);
     } catch (e) {
       setStatus(`Export failed: ${e}`);
@@ -412,6 +425,31 @@ function App() {
                 {inPoint !== null ? inPoint.toFixed(2) + "s" : "—"} → {outPoint !== null ? outPoint.toFixed(2) + "s" : "—"}
               </span>
               <button onClick={markOut}>Set Out (O)</button>
+              <label className="export-size">
+                <span className="export-size-label">Size</span>
+                <select
+                  value={sizeSelection}
+                  onChange={e => setSizeSelection(e.target.value)}
+                  className="export-size-select"
+                >
+                  <option value="original">Original quality</option>
+                  {TARGET_SIZE_PRESETS.map(mb => (
+                    <option key={mb} value={String(mb)}>{mb} MB{mb === 8 ? " (Discord)" : ""}</option>
+                  ))}
+                  <option value="custom">Custom…</option>
+                </select>
+              </label>
+              {sizeSelection === "custom" && (
+                <input
+                  type="number"
+                  min={1}
+                  step={1}
+                  placeholder="MB"
+                  value={customMb}
+                  onChange={e => setCustomMb(e.target.value)}
+                  className="export-size-custom"
+                />
+              )}
               <button className="btn-export" onClick={doExport}>Export trim</button>
             </div>
 
