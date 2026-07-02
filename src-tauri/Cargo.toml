@@ -26,3 +26,4 @@ tauri-plugin-dialog = "2.7.1"
 axum = "0.8"
 tower-http = { version = "0.6", features = ["cors"] }
 tokio = { version = "1", features = ["net"] }
+rusqlite = { version = "0.32", features = ["bundled"] }

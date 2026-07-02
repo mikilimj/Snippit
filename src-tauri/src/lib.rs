@@ -1,6 +1,7 @@
 mod probe;
 pub mod export;
 pub mod setup;
+pub mod library;
 mod media_server;
 
 use export::{build_compress_pass_args, build_trim_args, compute_target_bitrates, validate_trim, TrackConfig};
@@ -171,6 +172,37 @@ async fn export_compressed(
     }
 }
 
+/// Opens the library database that lives inside the configured app root
+/// (`<root>/library.db`). Errors if setup hasn't run yet.
+fn open_library(app: &tauri::AppHandle) -> Result<rusqlite::Connection, String> {
+    let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    let root = setup::read_pointer_file(&config_dir)
+        .ok_or_else(|| "Library is not set up yet".to_string())?;
+    library::open_db(&std::path::Path::new(&root).join("library.db"))
+}
+
+#[tauri::command]
+fn add_to_library(
+    app: tauri::AppHandle,
+    path: String,
+    meta: ClipMeta,
+) -> Result<library::ClipRow, String> {
+    let conn = open_library(&app)?;
+    library::upsert_clip(&conn, &path, &meta, None)
+}
+
+#[tauri::command]
+fn list_library(app: tauri::AppHandle) -> Result<Vec<library::ClipRow>, String> {
+    let conn = open_library(&app)?;
+    library::list_clips(&conn)
+}
+
+#[tauri::command]
+fn remove_from_library(app: tauri::AppHandle, id: i64) -> Result<(), String> {
+    let conn = open_library(&app)?;
+    library::remove_clip(&conn, id)
+}
+
 #[tauri::command]
 fn get_app_root(app: tauri::AppHandle) -> Result<Option<String>, String> {
     let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
@@ -229,7 +261,10 @@ pub fn run() {
             get_app_root,
             check_root_dir_status,
             check_path_writable,
-            complete_setup
+            complete_setup,
+            add_to_library,
+            list_library,
+            remove_from_library
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
