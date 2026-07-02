@@ -29,8 +29,28 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf \
             gstreamer1.0-plugins-good
 
-      - name: Stage ffmpeg/ffprobe sidecars (Linux)
+      # BtbN publishes to a fixed "latest" tag that it overwrites in place, so the
+      # download URL never changes even when the artifact does — the asset's ETag
+      # is the only stable signal of its actual content, so it's what keys the cache
+      # (a plain URL-based key would cache the very first ffmpeg build forever).
+      - name: Resolve ffmpeg asset ETag (Linux)
         if: matrix.platform == 'ubuntu-22.04'
+        id: ffmpeg-etag
+        run: |
+          etag=$(curl -sIL "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz" \
+            | grep -i '^etag:' | tail -1 | sed -E 's/.*"([^"]+)".*/\1/' | tr -d '\r')
+          echo "etag=$etag" >> "$GITHUB_OUTPUT"
+
+      - name: Cache ffmpeg/ffprobe sidecars (Linux)
+        if: matrix.platform == 'ubuntu-22.04'
+        id: cache-ffmpeg
+        uses: actions/cache@v4
+        with:
+          path: src-tauri/binaries
+          key: ffmpeg-sidecars-linux64-gpl-${{ steps.ffmpeg-etag.outputs.etag }}
+
+      - name: Stage ffmpeg/ffprobe sidecars (Linux)
+        if: matrix.platform == 'ubuntu-22.04' && steps.cache-ffmpeg.outputs.cache-hit != 'true'
         run: |
           curl -L -o ffmpeg.tar.xz "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz"
           mkdir -p ffmpeg-extract src-tauri/binaries
@@ -39,8 +59,25 @@ jobs:
           cp ffmpeg-extract/bin/ffprobe src-tauri/binaries/ffprobe-x86_64-unknown-linux-gnu
           chmod +x src-tauri/binaries/*
 
-      - name: Stage ffmpeg/ffprobe sidecars (Windows)
+      - name: Resolve ffmpeg asset ETag (Windows)
         if: matrix.platform == 'windows-latest'
+        id: ffmpeg-etag-windows
+        shell: pwsh
+        run: |
+          $resp = Invoke-WebRequest -Uri "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip" -Method Head
+          $etag = $resp.Headers['ETag'] -replace '"', ''
+          echo "etag=$etag" >> $env:GITHUB_OUTPUT
+
+      - name: Cache ffmpeg/ffprobe sidecars (Windows)
+        if: matrix.platform == 'windows-latest'
+        id: cache-ffmpeg-windows
+        uses: actions/cache@v4
+        with:
+          path: src-tauri/binaries
+          key: ffmpeg-sidecars-win64-gpl-${{ steps.ffmpeg-etag-windows.outputs.etag }}
+
+      - name: Stage ffmpeg/ffprobe sidecars (Windows)
+        if: matrix.platform == 'windows-latest' && steps.cache-ffmpeg-windows.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
           Invoke-WebRequest -Uri "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip" -OutFile ffmpeg.zip
