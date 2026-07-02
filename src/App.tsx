@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { probeClip, exportTrim, exportCompressed, prepareAudioTracks, type ClipMeta, type TrackConfig } from "./api";
+import { probeClip, exportTrim, exportCompressed, prepareAudioTracks, getAppRoot, type ClipMeta, type TrackConfig, type SetupResult } from "./api";
 import { isCustomSelectionValid, resolveTargetMb, TARGET_SIZE_PRESETS } from "./exportOptions";
 import { setIn, setOut } from "./trim";
 import { Timeline } from "./Timeline";
@@ -32,6 +32,8 @@ function App() {
   const [mediaPort, setMediaPort] = useState<number | null>(null);
   const [sizeSelection, setSizeSelection] = useState("original");
   const [customMb, setCustomMb] = useState("");
+  // `undefined` = still checking, `null` = needs first-run setup, string = configured root
+  const [appRoot, setAppRoot] = useState<string | null | undefined>(undefined);
 
   // ── Multi-track audio state ──────────────────────────────────────────────────
   const [trackConfigs, setTrackConfigs] = useState<TrackConfig[]>([]);
