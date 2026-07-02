@@ -2,7 +2,7 @@ mod probe;
 pub mod export;
 mod media_server;
 
-use export::{build_trim_args, validate_trim, TrackConfig};
+use export::{build_compress_pass_args, build_trim_args, compute_target_bitrates, validate_trim, TrackConfig};
 use probe::{parse_ffprobe_json, ClipMeta};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -111,6 +111,65 @@ async fn export_trim(
     Ok(output)
 }
 
+/// Two-pass H.264/AAC export that compresses the trimmed span to a target file
+/// size (Discord presets). Pass 1 analyzes, pass 2 writes the real output; the
+/// x264 pass log lives in the temp dir and is cleaned up on both success and
+/// failure.
+#[tauri::command]
+async fn export_compressed(
+    app: tauri::AppHandle,
+    source: String,
+    in_secs: f64,
+    out_secs: f64,
+    output: String,
+    track_configs: Vec<TrackConfig>,
+    target_mb: f64,
+) -> Result<String, String> {
+    validate_trim(&source, &output, in_secs, out_secs)?;
+    let (video_kbps, audio_kbps) = compute_target_bitrates(target_mb, out_secs - in_secs)?;
+
+    let mut hasher = DefaultHasher::new();
+    output.hash(&mut hasher);
+    let passlog = std::env::temp_dir().join(format!("clipsnip-2pass-{:x}", hasher.finish()));
+    let passlog_str = passlog.to_string_lossy().to_string();
+
+    let mut run_error: Option<String> = None;
+    for pass in [1u8, 2u8] {
+        let args = build_compress_pass_args(
+            &source, in_secs, out_secs, &output, &track_configs,
+            video_kbps, audio_kbps, pass, &passlog_str,
+        );
+        let result = app
+            .shell()
+            .sidecar("ffmpeg")
+            .map_err(|e| e.to_string())?
+            .args(args)
+            .output()
+            .await
+            .map_err(|e| e.to_string());
+        match result {
+            Ok(r) if r.status.success() => {}
+            Ok(r) => {
+                run_error = Some(String::from_utf8_lossy(&r.stderr).to_string());
+                break;
+            }
+            Err(e) => {
+                run_error = Some(e);
+                break;
+            }
+        }
+    }
+
+    for suffix in ["-0.log", "-0.log.mbtree"] {
+        let _ = std::fs::remove_file(format!("{passlog_str}{suffix}"));
+    }
+
+    match run_error {
+        Some(e) => Err(e),
+        None => Ok(output),
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -124,6 +183,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             probe_clip,
             export_trim,
+            export_compressed,
             get_media_port,
             prepare_audio_tracks
         ])

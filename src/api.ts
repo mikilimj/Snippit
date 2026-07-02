@@ -40,3 +40,22 @@ export function exportTrim(
 ): Promise<string> {
   return invoke<string>("export_trim", { source, inSecs, outSecs, output, trackConfigs });
 }
+
+/** Two-pass H.264/AAC export compressed to a target file size in MB. */
+export function exportCompressed(
+  source: string,
+  inSecs: number,
+  outSecs: number,
+  output: string,
+  trackConfigs: TrackConfig[],
+  targetMb: number,
+): Promise<string> {
+  return invoke<string>("export_compressed", {
+    source,
+    inSecs,
+    outSecs,
+    output,
+    trackConfigs,
+    targetMb,
+  });
+}
