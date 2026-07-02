@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { probeClip, exportTrim, exportCompressed, prepareAudioTracks, getAppRoot, addToLibrary, listLibrary, removeFromLibrary, type ClipMeta, type ClipRow, type TrackConfig, type SetupResult } from "./api";
+import { probeClip, exportTrim, exportCompressed, prepareAudioTracks, getAppRoot, addToLibrary, listLibrary, removeFromLibrary, rescanLibrary, type ClipMeta, type ClipRow, type TrackConfig, type SetupResult } from "./api";
 import { isCustomSelectionValid, resolveTargetMb, TARGET_SIZE_PRESETS } from "./exportOptions";
 import { setIn, setOut } from "./trim";
 import { Timeline } from "./Timeline";
@@ -63,6 +64,19 @@ function App() {
     listLibrary()
       .then(setLibrary)
       .catch(err => console.error("Failed to load library:", err));
+  }, [appRoot]);
+
+  // Auto-import: the Rust watcher emits `clip-added` for each new/updated clip
+  // it ingests from the watched folders. Merge it in (newest first, de-duped).
+  useEffect(() => {
+    if (typeof appRoot !== "string") return;
+    const unlisten = listen<ClipRow>("clip-added", e => {
+      const row = e.payload;
+      setLibrary(prev => [row, ...prev.filter(x => x.path !== row.path)]);
+    });
+    return () => {
+      unlisten.then(f => f());
+    };
   }, [appRoot]);
 
   // Force-mute the native <video> element's own audio the moment Web Audio
@@ -363,7 +377,16 @@ function App() {
         </div>
         <div className="library-header">
           <span className="library-title">Library</span>
-          <button className="btn-sm" onClick={pickClip}>+ Open</button>
+          <div className="library-header-actions">
+            <button
+              className="btn-sm"
+              title="Re-scan watched folders"
+              onClick={() => rescanLibrary().catch(err => console.error("Rescan failed:", err))}
+            >
+              ⟳
+            </button>
+            <button className="btn-sm" onClick={pickClip}>+ Open</button>
+          </div>
         </div>
         {library.length === 0 ? (
           <p className="library-empty">Open a clip to add it here.</p>
@@ -376,6 +399,16 @@ function App() {
                 onClick={() => openClip(entry.path)}
                 title={entry.path}
               >
+                {entry.thumbnailPath && mediaPort ? (
+                  <img
+                    className="library-thumb"
+                    src={`http://127.0.0.1:${mediaPort}/file?path=${encodeURIComponent(entry.thumbnailPath)}`}
+                    alt=""
+                    loading="lazy"
+                  />
+                ) : (
+                  <div className="library-thumb library-thumb-empty" />
+                )}
                 <div className="library-item-text">
                   <span className="library-name">{entry.displayName}</span>
                   <span className="library-meta">

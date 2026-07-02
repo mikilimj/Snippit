@@ -58,6 +58,14 @@ export function removeFromLibrary(id: number): Promise<void> {
   return invoke<void>("remove_from_library", { id });
 }
 
+/**
+ * Re-scan the configured watched folders for clips added since launch. Newly
+ * indexed clips are delivered asynchronously via `clip-added` events.
+ */
+export function rescanLibrary(): Promise<void> {
+  return invoke<void>("rescan_library");
+}
+
 /** Extract each requested audio stream to a temp M4A file and return their paths. */
 export function prepareAudioTracks(path: string, streamIndices: number[]): Promise<string[]> {
   return invoke<string[]>("prepare_audio_tracks", { path, streamIndices });

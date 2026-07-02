@@ -2,13 +2,19 @@ mod probe;
 pub mod export;
 pub mod setup;
 pub mod library;
+pub mod media;
+pub mod watcher;
 mod media_server;
 
 use export::{build_compress_pass_args, build_trim_args, compute_target_bitrates, validate_trim, TrackConfig};
 use probe::{parse_ffprobe_json, ClipMeta};
 use std::collections::hash_map::DefaultHasher;
+use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
-use tauri::Manager;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use tauri::{Emitter, Manager};
 use tauri_plugin_shell::ShellExt;
 
 struct MediaPort(u16);
@@ -18,8 +24,9 @@ fn get_media_port(state: tauri::State<MediaPort>) -> u16 {
     state.0
 }
 
-#[tauri::command]
-async fn probe_clip(app: tauri::AppHandle, path: String) -> Result<ClipMeta, String> {
+/// Runs ffprobe on a path and parses its metadata. Shared by the `probe_clip`
+/// command and the background auto-import path.
+async fn probe_path(app: &tauri::AppHandle, path: &str) -> Result<ClipMeta, String> {
     let output = app
         .shell()
         .sidecar("ffprobe")
@@ -29,7 +36,7 @@ async fn probe_clip(app: tauri::AppHandle, path: String) -> Result<ClipMeta, Str
             "-print_format", "json",
             "-show_format",
             "-show_streams",
-            path.as_str(),
+            path,
         ])
         .output()
         .await
@@ -38,6 +45,11 @@ async fn probe_clip(app: tauri::AppHandle, path: String) -> Result<ClipMeta, Str
         return Err(String::from_utf8_lossy(&output.stderr).to_string());
     }
     parse_ffprobe_json(&String::from_utf8_lossy(&output.stdout))
+}
+
+#[tauri::command]
+async fn probe_clip(app: tauri::AppHandle, path: String) -> Result<ClipMeta, String> {
+    probe_path(&app, &path).await
 }
 
 /// Extract individual audio tracks to temp M4A files so the frontend can play
@@ -229,7 +241,221 @@ fn complete_setup(
     let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
     let root = std::path::Path::new(&root_path);
     let source = source_folder.as_deref().map(std::path::Path::new);
-    setup::complete_setup_at(root, &config_dir, &ingestion_mode, source)
+    let result = setup::complete_setup_at(root, &config_dir, &ingestion_mode, source)?;
+    // First-run: setup() couldn't start the watcher (no root yet), so start now.
+    start_watching(&app);
+    Ok(result)
+}
+
+// ── Auto-import: startup scan + live folder watcher (spec §4.2) ────────────────
+
+/// Ensures the scan/watcher starts at most once (from `setup()` on a configured
+/// launch, or from `complete_setup` on first run).
+struct WatchStarted(AtomicBool);
+/// Paths currently being ingested, so duplicate filesystem events are dropped.
+struct InFlight(Arc<Mutex<HashSet<PathBuf>>>);
+
+/// Timestamp (seconds) to grab the thumbnail frame from — a little into the clip,
+/// but never past the end of very short clips.
+fn thumb_timestamp(duration_secs: f64) -> f64 {
+    (duration_secs * 0.1).clamp(0.0, 2.0)
+}
+
+async fn generate_thumbnail(
+    app: &tauri::AppHandle,
+    source: &str,
+    out: &str,
+    at_secs: f64,
+) -> Result<(), String> {
+    let args = media::build_thumbnail_args(source, out, at_secs, 320);
+    let result = app
+        .shell()
+        .sidecar("ffmpeg")
+        .map_err(|e| e.to_string())?
+        .args(args)
+        .output()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !result.status.success() {
+        return Err(String::from_utf8_lossy(&result.stderr).to_string());
+    }
+    Ok(())
+}
+
+/// Polls a file's size until it settles (recorders write progressively). Returns
+/// false if it never stabilizes within the timeout.
+async fn wait_for_stable_size(path: &Path) -> bool {
+    let mut samples: Vec<u64> = Vec::new();
+    for _ in 0..40 {
+        let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+        samples.push(size);
+        if watcher::is_write_complete(&samples) {
+            return true;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    }
+    false
+}
+
+fn file_mtime_unix(path: &Path) -> i64 {
+    std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// Probes, thumbnails, and indexes one file. Returns the row, or None if the file
+/// never stabilized or isn't probeable.
+async fn ingest_file_inner(
+    app: &tauri::AppHandle,
+    path: &Path,
+) -> Result<Option<library::ClipRow>, String> {
+    if !wait_for_stable_size(path).await {
+        return Ok(None);
+    }
+    let path_str = path.to_string_lossy().to_string();
+    let meta = match probe_path(app, &path_str).await {
+        Ok(m) => m,
+        Err(_) => return Ok(None),
+    };
+
+    let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    let root = match setup::read_pointer_file(&config_dir) {
+        Some(r) => r,
+        None => return Ok(None),
+    };
+
+    let cache = Path::new(&root).join("Cache").join("thumbnails");
+    let _ = std::fs::create_dir_all(&cache);
+    let thumb = media::thumbnail_path(&cache, &path_str, file_mtime_unix(path));
+    let thumb_str = thumb.to_string_lossy().to_string();
+    let thumb_opt = if thumb.exists() {
+        Some(thumb_str)
+    } else if generate_thumbnail(app, &path_str, &thumb_str, thumb_timestamp(meta.duration_secs))
+        .await
+        .is_ok()
+        && thumb.exists()
+    {
+        Some(thumb_str)
+    } else {
+        None
+    };
+
+    let conn = library::open_db(&Path::new(&root).join("library.db"))?;
+    let row = library::upsert_clip(&conn, &path_str, &meta, thumb_opt.as_deref())?;
+    Ok(Some(row))
+}
+
+/// Ingests a file (de-duped against concurrent events) and emits `clip-added`.
+async fn ingest_and_emit(
+    app: tauri::AppHandle,
+    path: PathBuf,
+    in_flight: Arc<Mutex<HashSet<PathBuf>>>,
+) {
+    if !in_flight.lock().unwrap().insert(path.clone()) {
+        return; // already being ingested from another event
+    }
+    let result = ingest_file_inner(&app, &path).await;
+    in_flight.lock().unwrap().remove(&path);
+    if let Ok(Some(row)) = result {
+        let _ = app.emit("clip-added", row);
+    }
+}
+
+/// Resolves the configured watched folders, or None if setup hasn't run.
+fn resolve_watched_folders(app: &tauri::AppHandle) -> Option<(String, Vec<PathBuf>)> {
+    let config_dir = app.path().app_config_dir().ok()?;
+    let root = setup::read_pointer_file(&config_dir)?;
+    let (mode, source) = setup::read_settings(Path::new(&root))
+        .map(|s| (s.ingestion_mode, s.source_folder))
+        .unwrap_or_else(|| ("empty".to_string(), None));
+    let folders = watcher::watched_folders(Path::new(&root), &mode, source.as_deref());
+    Some((root, folders))
+}
+
+/// Scans every watched folder and ingests clips not already indexed.
+fn scan_folders_now(app: &tauri::AppHandle) {
+    let Some((root, folders)) = resolve_watched_folders(app) else {
+        return;
+    };
+    let in_flight = app.state::<InFlight>().0.clone();
+    let existing: HashSet<String> = library::open_db(&Path::new(&root).join("library.db"))
+        .and_then(|c| library::list_clips(&c))
+        .map(|rows| rows.into_iter().map(|r| r.path).collect())
+        .unwrap_or_default();
+
+    for folder in &folders {
+        for file in watcher::scan_video_files(folder) {
+            if existing.contains(&file.to_string_lossy().to_string()) {
+                continue;
+            }
+            tauri::async_runtime::spawn(ingest_and_emit(app.clone(), file, in_flight.clone()));
+        }
+    }
+}
+
+/// Runs the initial scan and starts the live `notify` watcher. Idempotent.
+fn start_watching(app: &tauri::AppHandle) {
+    let started = app.state::<WatchStarted>();
+    if started.0.swap(true, Ordering::SeqCst) {
+        return; // already running
+    }
+    let Some((_root, folders)) = resolve_watched_folders(app) else {
+        // Not configured yet; allow a later call after first-run setup.
+        started.0.store(false, Ordering::SeqCst);
+        return;
+    };
+
+    scan_folders_now(app);
+
+    let in_flight = app.state::<InFlight>().0.clone();
+    let app_for_thread = app.clone();
+    let (tx, rx) = std::sync::mpsc::channel::<notify::Result<notify::Event>>();
+    let mut fs_watcher = match notify::recommended_watcher(move |res| {
+        let _ = tx.send(res);
+    }) {
+        Ok(w) => w,
+        Err(_) => return,
+    };
+
+    use notify::Watcher;
+    for folder in &folders {
+        let _ = std::fs::create_dir_all(folder);
+        let _ = fs_watcher.watch(folder, notify::RecursiveMode::Recursive);
+    }
+
+    std::thread::spawn(move || {
+        // Holding the watcher here keeps it alive; dropping it stops watching.
+        let _keep_alive = fs_watcher;
+        for res in rx {
+            let Ok(event) = res else { continue };
+            if !matches!(
+                event.kind,
+                notify::EventKind::Create(_) | notify::EventKind::Modify(_)
+            ) {
+                continue;
+            }
+            for path in event.paths {
+                if !setup::is_video_extension(&path) {
+                    continue;
+                }
+                tauri::async_runtime::spawn(ingest_and_emit(
+                    app_for_thread.clone(),
+                    path,
+                    in_flight.clone(),
+                ));
+            }
+        }
+    });
+}
+
+/// Manually re-scans watched folders for clips added while the app was closed or
+/// that a watcher event missed. New clips arrive via `clip-added` events.
+#[tauri::command]
+fn rescan_library(app: tauri::AppHandle) {
+    scan_folders_now(&app);
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -250,6 +476,11 @@ pub fn run() {
         .setup(|app| {
             let port = media_server::start();
             app.manage(MediaPort(port));
+            app.manage(WatchStarted(AtomicBool::new(false)));
+            app.manage(InFlight(Arc::new(Mutex::new(HashSet::new()))));
+            // Start auto-import if already configured; a first-run launch starts
+            // it from complete_setup instead.
+            start_watching(app.handle());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -264,7 +495,8 @@ pub fn run() {
             complete_setup,
             add_to_library,
             list_library,
-            remove_from_library
+            remove_from_library,
+            rescan_library
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

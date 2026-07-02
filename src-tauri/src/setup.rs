@@ -128,6 +128,12 @@ pub fn read_pointer_file(config_dir: &Path) -> Option<String> {
     Some(pointer.root_path)
 }
 
+/// Reads `<root>/settings.json`. None if it's missing or unparseable.
+pub fn read_settings(root: &Path) -> Option<SetupSettings> {
+    let content = fs::read_to_string(root.join("settings.json")).ok()?;
+    serde_json::from_str(&content).ok()
+}
+
 fn now_unix() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -277,6 +283,26 @@ mod tests {
     fn read_pointer_file_returns_none_when_missing() {
         let config_dir = temp_subdir("pointer_missing");
         assert_eq!(read_pointer_file(&config_dir), None);
+    }
+
+    #[test]
+    fn read_settings_round_trips_what_write_settings_wrote() {
+        let root = temp_subdir("read_settings");
+        let settings = SetupSettings {
+            ingestion_mode: "watch".to_string(),
+            source_folder: Some("/rec/out".to_string()),
+            created_at: 42,
+        };
+        write_settings(&root, &settings).unwrap();
+        let read = read_settings(&root).unwrap();
+        assert_eq!(read.ingestion_mode, "watch");
+        assert_eq!(read.source_folder, Some("/rec/out".to_string()));
+    }
+
+    #[test]
+    fn read_settings_returns_none_when_missing() {
+        let root = temp_subdir("read_settings_missing");
+        assert!(read_settings(&root).is_none());
     }
 
     #[test]

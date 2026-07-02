@@ -40,17 +40,7 @@ async fn serve_file(headers: HeaderMap, Query(q): Query<FileQuery>) -> impl Into
     };
 
     let ext = path.rsplit('.').next().unwrap_or("").to_lowercase();
-    let mime = match ext.as_str() {
-        // .mov is ISOBMFF-compatible; advertise as video/mp4 so all WebViews accept it
-        "mp4" | "m4v" | "mov" => "video/mp4",
-        // audio/mp4 covers AAC-in-M4A (used for extracted audio tracks)
-        "m4a" | "aac" => "audio/mp4",
-        "webm" => "video/webm",
-        "mkv" => "video/x-matroska",
-        "avi" => "video/x-msvideo",
-        "flv" => "video/x-flv",
-        _ => "application/octet-stream",
-    };
+    let mime = mime_for_ext(&ext);
 
     if let Some(range_str) = headers.get("range").and_then(|v| v.to_str().ok()) {
         if let Some((start, end)) = parse_byte_range(range_str, len) {
@@ -89,6 +79,42 @@ async fn serve_file(headers: HeaderMap, Query(q): Query<FileQuery>) -> impl Into
         buf,
     )
         .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mime_for_ext_covers_video_audio_and_thumbnail_images() {
+        assert_eq!(mime_for_ext("mp4"), "video/mp4");
+        assert_eq!(mime_for_ext("mov"), "video/mp4");
+        assert_eq!(mime_for_ext("m4a"), "audio/mp4");
+        assert_eq!(mime_for_ext("mkv"), "video/x-matroska");
+        // thumbnails must be served as real images so <img> renders them
+        assert_eq!(mime_for_ext("jpg"), "image/jpeg");
+        assert_eq!(mime_for_ext("jpeg"), "image/jpeg");
+        assert_eq!(mime_for_ext("png"), "image/png");
+        assert_eq!(mime_for_ext("unknown"), "application/octet-stream");
+    }
+}
+
+/// Maps a lowercased file extension to a Content-Type. `.mov` is advertised as
+/// `video/mp4` (ISOBMFF-compatible) so every WebView accepts it; `.m4a`/`.aac`
+/// as `audio/mp4` for extracted audio tracks; image types cover thumbnails.
+fn mime_for_ext(ext: &str) -> &'static str {
+    match ext {
+        "mp4" | "m4v" | "mov" => "video/mp4",
+        "m4a" | "aac" => "audio/mp4",
+        "webm" => "video/webm",
+        "mkv" => "video/x-matroska",
+        "avi" => "video/x-msvideo",
+        "flv" => "video/x-flv",
+        "jpg" | "jpeg" => "image/jpeg",
+        "png" => "image/png",
+        "webp" => "image/webp",
+        _ => "application/octet-stream",
+    }
 }
 
 fn parse_byte_range(range_str: &str, len: u64) -> Option<(u64, u64)> {
