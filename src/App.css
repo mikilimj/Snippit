@@ -102,6 +102,26 @@
   min-width: 0;
 }
 
+.library-thumb {
+  flex: none;
+  width: 44px;
+  height: 26px;
+  border-radius: var(--radius-sm);
+  object-fit: cover;
+  background: var(--panel-raised);
+  border: 1px solid var(--border);
+}
+
+.library-thumb-empty {
+  background: linear-gradient(135deg, var(--panel-raised), var(--panel));
+}
+
+.library-header-actions {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
 .library-remove {
   flex: none;
   width: 20px;
