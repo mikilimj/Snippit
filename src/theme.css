@@ -1,0 +1,87 @@
+/* ─── ClipSnip "Midnight aurora" theme tokens ────────────────────────────────
+   Single source of truth for the visual language introduced by the first-run
+   wizard, shared by the wizard and the editor. Dark-only by design. */
+
+:root {
+  /* Surfaces */
+  --bg: #06060a;
+  --panel-glass: rgba(15, 15, 22, 0.55);
+  --panel-solid: #0f0f16;
+  --panel-raised: rgba(255, 255, 255, 0.04);
+  --panel-hover: rgba(255, 255, 255, 0.07);
+
+  /* Lines */
+  --border: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.14);
+
+  /* Ink */
+  --text: #ffffff;
+  --text-dim: rgba(255, 255, 255, 0.65);
+  --text-faint: rgba(255, 255, 255, 0.4);
+
+  /* Accent (violet) */
+  --accent: #a78bfa;
+  --accent-strong: #c4b5fd;
+  --accent-tint: rgba(167, 139, 250, 0.14);
+  --accent-border: rgba(167, 139, 250, 0.3);
+  --grad-primary: linear-gradient(135deg, #8b5cf6, #6366f1);
+  --grad-shadow: 0 8px 20px rgba(99, 102, 241, 0.35);
+
+  /* Trim semantics — aurora family, not stock green/red */
+  --in-color: #2dd4bf;
+  --out-color: #fb7185;
+
+  /* Feedback */
+  --ok: #5eead4;
+  --ok-bg: rgba(20, 83, 74, 0.25);
+  --warn: #ddaa44;
+  --warn-bg: rgba(90, 64, 0, 0.25);
+  --danger: #ff8080;
+  --danger-bg: rgba(90, 20, 20, 0.25);
+
+  /* Shape */
+  --radius-sm: 8px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+
+  font-family: "Schibsted Grotesk Variable", "Schibsted Grotesk", "Segoe UI",
+    Avenir, Helvetica, Arial, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  font-weight: 400;
+  color: var(--text);
+  background-color: var(--bg);
+  color-scheme: dark;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+/* ─── Aurora backdrop (wizard + editor empty state) ─────────────────────────── */
+.aurora-blob {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(45px);
+  pointer-events: none;
+}
+
+.aurora-blob-1 { width: 280px; height: 280px; background: #312e81; opacity: .5;  top: -70px;    left: -50px;  animation: auroraFloatA 10s ease-in-out infinite; }
+.aurora-blob-2 { width: 250px; height: 250px; background: #164e63; opacity: .45; bottom: -70px; right: -40px; animation: auroraFloatB 12s ease-in-out infinite; }
+.aurora-blob-3 { width: 200px; height: 200px; background: #4a044e; opacity: .4;  top: 60px;     right: 40px;  animation: auroraFloatC 8s  ease-in-out infinite; }
+
+@keyframes auroraFloatA { 0%, 100% { transform: translate(0, 0); } 50% { transform: translate(40px, 30px); } }
+@keyframes auroraFloatB { 0%, 100% { transform: translate(0, 0); } 50% { transform: translate(-30px, -20px); } }
+@keyframes auroraFloatC { 0%, 100% { transform: translate(0, 0); } 50% { transform: translate(-20px, 40px); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .aurora-blob-1, .aurora-blob-2, .aurora-blob-3 { animation: none; }
+}

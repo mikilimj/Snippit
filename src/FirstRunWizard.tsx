@@ -2,6 +2,7 @@ import { useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { checkRootDirStatus, checkPathWritable, completeSetup, type SetupResult } from "./api";
 import { canContinueFromRootStep, canFinishIngestionStep, type IngestionMode } from "./wizardValidation";
+import logo from "./assets/logo.png";
 import "./FirstRunWizard.css";
 
 interface FirstRunWizardProps {
@@ -56,9 +57,9 @@ export function FirstRunWizard({ onComplete }: FirstRunWizardProps) {
 
   return (
     <div className="wiz-stage">
-      <div className="wiz-blob wiz-blob-1" />
-      <div className="wiz-blob wiz-blob-2" />
-      <div className="wiz-blob wiz-blob-3" />
+      <div className="aurora-blob aurora-blob-1" />
+      <div className="aurora-blob aurora-blob-2" />
+      <div className="aurora-blob aurora-blob-3" />
 
       <div className="wiz-panel">
         <div className="wiz-dots">
@@ -69,6 +70,7 @@ export function FirstRunWizard({ onComplete }: FirstRunWizardProps) {
 
         {step === 0 && (
           <>
+            <img className="wiz-logo" src={logo} alt="" />
             <div className="wiz-title">Welcome to ClipSnip</div>
             <div className="wiz-desc">
               Fast trimming for your game clips. Let's set up where your clips and
