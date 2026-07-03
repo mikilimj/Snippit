@@ -11,6 +11,22 @@ import {
   type ExportProgress,
 } from "./api";
 
+function ProgressBar({ progress }: { progress: ExportProgress }) {
+  return (
+    <div className="export-progress">
+      <div className="export-progress-track">
+        <div
+          className="export-progress-fill"
+          style={{ transform: `scaleX(${Math.max(0, Math.min(1, progress.fraction))})` }}
+        />
+      </div>
+      <span className="export-progress-label">
+        {progress.phase} · {Math.round(progress.fraction * 100)}%
+      </span>
+    </div>
+  );
+}
+
 /**
  * Settings surface for folder relocation (spec §4.7). v1 exposes moving the
  * watched source folder to a new path/disk with a cancellable progress bar.
@@ -146,19 +162,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
             </>
           )}
 
-          {moving && progress && (
-            <div className="export-progress">
-              <div className="export-progress-track">
-                <div
-                  className="export-progress-fill"
-                  style={{ transform: `scaleX(${Math.max(0, Math.min(1, progress.fraction))})` }}
-                />
-              </div>
-              <span className="export-progress-label">
-                {progress.phase} · {Math.round(progress.fraction * 100)}%
-              </span>
-            </div>
-          )}
+          {moving && progress && <ProgressBar progress={progress} />}
 
           {message && (
             <div className={/fail/i.test(message) ? "msg-error" : "msg-ok"}>{message}</div>
@@ -197,19 +201,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
             Replace existing library on import (instead of merging)
           </label>
 
-          {bundling && bundleProgress && (
-            <div className="export-progress">
-              <div className="export-progress-track">
-                <div
-                  className="export-progress-fill"
-                  style={{ transform: `scaleX(${Math.max(0, Math.min(1, bundleProgress.fraction))})` }}
-                />
-              </div>
-              <span className="export-progress-label">
-                {bundleProgress.phase} · {Math.round(bundleProgress.fraction * 100)}%
-              </span>
-            </div>
-          )}
+          {bundling && bundleProgress && <ProgressBar progress={bundleProgress} />}
 
           {bundleMsg && (
             <div className={/fail/i.test(bundleMsg) ? "msg-error" : "msg-ok"}>{bundleMsg}</div>

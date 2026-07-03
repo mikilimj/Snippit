@@ -366,6 +366,15 @@ fn get_watched_folder(app: tauri::AppHandle) -> Option<String> {
     }
 }
 
+/// Fraction complete for a `(done, total)` progress pair; `total == 0` reads as done.
+fn progress_fraction(done: usize, total: usize) -> f64 {
+    if total == 0 {
+        1.0
+    } else {
+        done as f64 / total as f64
+    }
+}
+
 /// Requests cancellation of the running folder relocation. Safe at any point —
 /// every file is either fully moved or untouched (spec §4.7).
 #[tauri::command]
@@ -423,7 +432,7 @@ async fn relocate_watched_folder(app: tauri::AppHandle, dest: String) -> Result<
             fanout,
             &|| app2.state::<RelocateJob>().0.load(Ordering::SeqCst),
             &mut |done, total, cur| {
-                let fraction = if total == 0 { 1.0 } else { done as f64 / total as f64 };
+                let fraction = progress_fraction(done, total);
                 let _ = app2.emit(
                     "relocate-progress",
                     ExportProgress {
@@ -475,8 +484,7 @@ fn copy_tree(
         if cancelled() {
             return Ok(false);
         }
-        let rel = f.strip_prefix(src_root).map_err(|e| e.to_string())?;
-        let dest = dest_root.join(rel);
+        let dest = relocate::dest_for(f, src_root, dest_root);
         if let Some(parent) = dest.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
@@ -531,7 +539,7 @@ async fn export_library(
             &clip_files,
             &|| app2.state::<BundleJob>().0.load(Ordering::SeqCst),
             &mut |d, t| {
-                let fraction = if t == 0 { 1.0 } else { d as f64 / t as f64 };
+                let fraction = progress_fraction(d, t);
                 let _ = app2.emit(
                     "bundle-progress",
                     ExportProgress { fraction, phase: format!("Bundling {d}/{t} files") },
@@ -579,7 +587,7 @@ async fn import_library(
                 &new_root_p,
                 &|| app2.state::<BundleJob>().0.load(Ordering::SeqCst),
                 &mut |d, t| {
-                    let fraction = if t == 0 { 1.0 } else { d as f64 / t as f64 };
+                    let fraction = progress_fraction(d, t);
                     let _ = app2.emit(
                         "bundle-progress",
                         ExportProgress { fraction, phase: format!("Copying {d}/{t} files") },
