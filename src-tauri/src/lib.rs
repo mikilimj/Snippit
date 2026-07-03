@@ -992,14 +992,36 @@ fn rescan_library(app: tauri::AppHandle) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // WebKitGTK's DMABUF/EGL renderer fails to create an EGL display inside our
-    // AppImage (its bundled libEGL/Mesa is older than the host driver), which
-    // aborts the web process and leaves a blank gray window. Disable that
-    // renderer only for AppImage runs so native/deb builds keep GPU-accelerated
-    // rendering. The APPIMAGE env var is set by the AppImage runtime.
+    // WebKitGTK's EGL platform-display init aborts with "Could not create
+    // default EGL display: EGL_BAD_PARAMETER" inside our AppImage, leaving a
+    // blank gray window. Root cause: linuxdeploy bundles our own
+    // libwayland-client.so (from the ubuntu-22.04 CI runner), which is older
+    // than the host's Wayland/Mesa stack; WebKit's GPU/Web process (which
+    // re-execs, so it picks up env vars set here) loads the mismatched
+    // bundled copy instead of the host's and fails to create the display.
+    // Disabling the DMABUF/compositing renderers alone does not avoid this -
+    // preloading the host's libwayland-client.so does. Only applied for
+    // AppImage runs (APPIMAGE env var, set by the AppImage runtime) so
+    // native/deb builds keep GPU-accelerated rendering with the correctly
+    // matched system libs.
     #[cfg(target_os = "linux")]
     if std::env::var_os("APPIMAGE").is_some() {
         std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+        std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
+
+        if std::env::var_os("LD_PRELOAD").is_none() {
+            let candidates = [
+                "/usr/lib/x86_64-linux-gnu/libwayland-client.so.0",
+                "/usr/lib64/libwayland-client.so.0",
+                "/usr/lib/libwayland-client.so.0",
+            ];
+            if let Some(host_lib) = candidates
+                .iter()
+                .find(|path| std::path::Path::new(path).exists())
+            {
+                std::env::set_var("LD_PRELOAD", host_lib);
+            }
+        }
     }
 
     tauri::Builder::default()
