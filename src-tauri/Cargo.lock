@@ -396,7 +396,7 @@ dependencies = [
 
 [[package]]
 name = "clipsnip"
-version = "0.2.3"
+version = "1.0.1"
 dependencies = [
  "axum",
  "notify",
