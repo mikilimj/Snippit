@@ -7,6 +7,7 @@
 use crate::probe::ClipMeta;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -281,6 +282,7 @@ pub fn export_index(
     root: &str,
 ) -> Result<Vec<(String, String)>, String> {
     let dest = open_db(dest_path)?;
+    dest.execute_batch("BEGIN").map_err(|e| e.to_string())?;
     let mut files = Vec::new();
     for c in list_clips(src)? {
         let rel = crate::bundle::relativize_path(&c.path, root);
@@ -312,6 +314,7 @@ pub fn export_index(
         )
         .map_err(|e| e.to_string())?;
     }
+    dest.execute_batch("COMMIT").map_err(|e| e.to_string())?;
     Ok(files)
 }
 
@@ -326,6 +329,7 @@ pub fn import_index(
     new_root: &str,
     replace: bool,
 ) -> Result<ImportStats, String> {
+    dest.execute_batch("BEGIN").map_err(|e| e.to_string())?;
     if replace {
         dest.execute_batch(
             "DELETE FROM clip_folders; DELETE FROM folders; DELETE FROM clips;",
@@ -333,7 +337,7 @@ pub fn import_index(
         .map_err(|e| e.to_string())?;
     }
 
-    let mut folder_map: std::collections::HashMap<i64, i64> = std::collections::HashMap::new();
+    let mut folder_map: HashMap<i64, i64> = HashMap::new();
     let mut folders_added = 0;
     for f in list_folders(bundle)? {
         let dest_id = match folder_id_by_name(dest, &f.name)? {
@@ -346,13 +350,17 @@ pub fn import_index(
         folder_map.insert(f.id, dest_id);
     }
 
-    let mut clip_map: std::collections::HashMap<i64, i64> = std::collections::HashMap::new();
+    // Snapshot existing clips by path once, instead of a SELECT per bundle clip,
+    // and keep it updated as we insert so intra-bundle duplicate paths still merge.
+    let mut existing_by_path: HashMap<String, i64> =
+        list_clips(dest)?.into_iter().map(|c| (c.path, c.id)).collect();
+    let mut clip_map: HashMap<i64, i64> = HashMap::new();
     let mut added = 0;
     let mut missing = 0;
     for c in list_clips(bundle)? {
         let abs = crate::bundle::absolutize_path(&c.path, new_root);
-        let dest_id = match clip_id_by_path(dest, &abs)? {
-            Some(id) => id, // merge: keep the existing clip
+        let dest_id = match existing_by_path.get(&abs) {
+            Some(&id) => id, // merge: keep the existing clip
             None => {
                 let is_missing = !Path::new(&abs).exists();
                 dest.execute(
@@ -371,7 +379,9 @@ pub fn import_index(
                 if is_missing {
                     missing += 1;
                 }
-                dest.last_insert_rowid()
+                let id = dest.last_insert_rowid();
+                existing_by_path.insert(abs, id);
+                id
             }
         };
         clip_map.insert(c.id, dest_id);
@@ -383,6 +393,7 @@ pub fn import_index(
         }
     }
 
+    dest.execute_batch("COMMIT").map_err(|e| e.to_string())?;
     Ok(ImportStats { added, missing, folders: folders_added })
 }
 

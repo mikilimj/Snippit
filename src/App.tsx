@@ -122,12 +122,16 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [appRoot, activeView]);
 
-  // Load the virtual folders once setup is configured.
-  useEffect(() => {
-    if (typeof appRoot !== "string") return;
+  function refreshFolders() {
     listFolders()
       .then(setFolders)
       .catch(err => console.error("Failed to load folders:", err));
+  }
+
+  // Load the virtual folders once setup is configured.
+  useEffect(() => {
+    if (typeof appRoot !== "string") return;
+    refreshFolders();
   }, [appRoot]);
 
   // Auto-import: the Rust watcher emits `clip-added` for each new/updated clip
@@ -151,9 +155,7 @@ function App() {
     if (typeof appRoot !== "string") return;
     const unlisten = listen("library-changed", () => {
       loadView(activeView);
-      listFolders()
-        .then(setFolders)
-        .catch(err => console.error("Failed to reload folders:", err));
+      refreshFolders();
     });
     return () => {
       unlisten.then(f => f());

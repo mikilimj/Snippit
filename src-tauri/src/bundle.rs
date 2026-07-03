@@ -4,7 +4,7 @@
 //! rules and the zip pack/unpack; the row copying lives in `library`.
 
 use std::fs;
-use std::io::{Read, Write};
+use std::io;
 use std::path::{Path, PathBuf};
 
 /// Whether `p` is an absolute path (unix `/…`, or Windows `C:\…` / `C:/…`).
@@ -63,11 +63,11 @@ pub fn write_bundle(
         zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
 
     zip.start_file("library.db", opts).map_err(|e| e.to_string())?;
-    zip.write_all(&fs::read(db_path).map_err(|e| e.to_string())?)
+    io::copy(&mut fs::File::open(db_path).map_err(|e| e.to_string())?, &mut zip)
         .map_err(|e| e.to_string())?;
 
     zip.start_file("settings.json", opts).map_err(|e| e.to_string())?;
-    zip.write_all(settings_json.as_bytes()).map_err(|e| e.to_string())?;
+    io::copy(&mut settings_json.as_bytes(), &mut zip).map_err(|e| e.to_string())?;
 
     let total = clip_files.len();
     for (i, (name, src)) in clip_files.iter().enumerate() {
@@ -78,8 +78,8 @@ pub fn write_bundle(
         }
         zip.start_file(format!("clips/{name}"), opts)
             .map_err(|e| e.to_string())?;
-        zip.write_all(&fs::read(src).map_err(|e| format!("read {}: {e}", src.display()))?)
-            .map_err(|e| e.to_string())?;
+        let mut src_file = fs::File::open(src).map_err(|e| format!("read {}: {e}", src.display()))?;
+        io::copy(&mut src_file, &mut zip).map_err(|e| format!("read {}: {e}", src.display()))?;
         on_file(i + 1, total);
     }
 
@@ -107,9 +107,8 @@ pub fn read_bundle(zip_path: &Path, out_dir: &Path) -> Result<PathBuf, String> {
         if let Some(parent) = out_path.parent() {
             fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
-        let mut buf = Vec::new();
-        entry.read_to_end(&mut buf).map_err(|e| e.to_string())?;
-        fs::write(&out_path, buf).map_err(|e| e.to_string())?;
+        let mut out_file = fs::File::create(&out_path).map_err(|e| e.to_string())?;
+        io::copy(&mut entry, &mut out_file).map_err(|e| e.to_string())?;
     }
 
     let db = out_dir.join("library.db");
