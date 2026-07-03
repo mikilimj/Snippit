@@ -9,7 +9,6 @@
 
 /* ─── Library sidebar ───────────────────────────────────────────────────────── */
 .library-panel {
-  width: 224px;
   min-width: 184px;
   flex-shrink: 0;
   display: flex;
@@ -17,6 +16,20 @@
   background: var(--panel-solid);
   border-right: 1px solid var(--border);
   overflow: hidden;
+}
+
+/* ─── Resize handles ────────────────────────────────────────────────────────── */
+.resize-handle-x {
+  width: 6px;
+  flex-shrink: 0;
+  cursor: col-resize;
+  background: transparent;
+  transition: background 0.15s ease;
+  touch-action: none;
+}
+
+.resize-handle-x:hover {
+  background: var(--accent-border);
 }
 
 .brand-row {
