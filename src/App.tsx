@@ -262,8 +262,13 @@ function App() {
     });
   }
 
+  // Pausing the <audio> elements only stops their *input* to the Web Audio
+  // graph — WebKitGTK's sink keeps playing the ~1-2s of samples already queued
+  // behind the gain nodes. Suspending the context halts output immediately;
+  // onVideoPlay resumes it.
   function onVideoPause() {
     audioElsRef.current.forEach(a => a.pause());
+    audioCtxRef.current?.suspend().catch(() => {});
   }
 
   // Periodic drift/stall correction, driven by the video's timeupdate (a few
@@ -288,6 +293,7 @@ function App() {
   // onPlaying (→ onVideoPlay) resyncs and resumes it.
   function onVideoWaiting() {
     audioElsRef.current.forEach(a => a.pause());
+    audioCtxRef.current?.suspend().catch(() => {});
   }
 
   // The native <video controls> bar exposes its own volume/mute button that
