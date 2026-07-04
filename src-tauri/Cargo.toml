@@ -25,7 +25,8 @@ tauri-plugin-shell = "2.3.5"
 tauri-plugin-dialog = "2.7.1"
 axum = "0.8"
 tower-http = { version = "0.6", features = ["cors"] }
-tokio = { version = "1", features = ["net", "time"] }
+tokio = { version = "1", features = ["net", "time", "fs", "io-util"] }
+tokio-util = { version = "0.7", features = ["io"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 notify = "6"
 zip = { version = "2", default-features = false, features = ["deflate"] }

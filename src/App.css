@@ -137,8 +137,12 @@
 
 .library-remove {
   flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 20px;
   height: 20px;
+  padding: 0;
   border: none;
   background: transparent;
   color: var(--text-faint);
@@ -171,6 +175,10 @@
   color: var(--text-faint);
   font-variant-numeric: tabular-nums;
 }
+
+/* Favorite marker in the meta line — the ★ action button is hidden until
+   hover, so this keeps favorited clips recognizable at rest. */
+.fav-inline { color: var(--warn); }
 
 /* ─── Folder rail (virtual-folder filters) ──────────────────────────────────── */
 .folder-rail {
@@ -241,11 +249,19 @@
 }
 
 /* ─── Per-clip actions (favorite / add-to-folder / remove) ───────────────────── */
+/* Collapsed until the row is hovered: the clip name runs all the way to the
+   panel edge, and the actions expand into that space on hover. */
 .library-actions {
   flex: none;
   display: flex;
   align-items: center;
   gap: 2px;
+  width: 0;
+  overflow: hidden;
+}
+.library-item:hover .library-actions,
+.library-item:focus-within .library-actions {
+  width: auto;
 }
 
 .library-fav {
