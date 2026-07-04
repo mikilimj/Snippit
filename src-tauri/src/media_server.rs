@@ -1,4 +1,5 @@
 use axum::{
+    body::Body,
     extract::Query,
     http::{header, HeaderMap, StatusCode},
     response::IntoResponse,
@@ -6,21 +7,29 @@ use axum::{
     Router,
 };
 use serde::Deserialize;
-use std::{
-    fs::File,
-    io::{Read, Seek, SeekFrom},
-};
+use std::io::SeekFrom;
+use tokio::io::{AsyncReadExt, AsyncSeekExt};
+use tokio_util::io::ReaderStream;
 use tower_http::cors::CorsLayer;
+
+/// Chunk size for streamed file reads. Small enough that a client abort stops
+/// disk I/O almost immediately, large enough to keep syscall overhead low.
+const STREAM_CHUNK: usize = 64 * 1024;
 
 #[derive(Deserialize)]
 struct FileQuery {
     path: String,
 }
 
+/// Serves a local file with HTTP range support, streaming the body in chunks.
+/// Media elements request open-ended ranges (`bytes=N-`) and abort once their
+/// buffer is full, so the response must be backpressure-driven: buffering the
+/// whole range up front would read entire multi-GB videos into memory on every
+/// buffer top-up, starving concurrent audio-track streams.
 async fn serve_file(headers: HeaderMap, Query(q): Query<FileQuery>) -> impl IntoResponse {
     let path = &q.path;
 
-    let mut file = match File::open(path) {
+    let mut file = match tokio::fs::File::open(path).await {
         Ok(f) => f,
         Err(e) => {
             let status = if e.kind() == std::io::ErrorKind::NotFound {
@@ -28,15 +37,13 @@ async fn serve_file(headers: HeaderMap, Query(q): Query<FileQuery>) -> impl Into
             } else {
                 StatusCode::FORBIDDEN
             };
-            return (status, axum::body::Body::empty()).into_response();
+            return (status, Body::empty()).into_response();
         }
     };
 
-    let len = match file.metadata() {
+    let len = match file.metadata().await {
         Ok(m) => m.len(),
-        Err(_) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, axum::body::Body::empty()).into_response()
-        }
+        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, Body::empty()).into_response(),
     };
 
     let ext = path.rsplit('.').next().unwrap_or("").to_lowercase();
@@ -45,8 +52,8 @@ async fn serve_file(headers: HeaderMap, Query(q): Query<FileQuery>) -> impl Into
     if let Some(range_str) = headers.get("range").and_then(|v| v.to_str().ok()) {
         if let Some((start, end)) = parse_byte_range(range_str, len) {
             let count = end - start + 1;
-            let mut buf = vec![0u8; count as usize];
-            if file.seek(SeekFrom::Start(start)).is_ok() && file.read_exact(&mut buf).is_ok() {
+            if file.seek(SeekFrom::Start(start)).await.is_ok() {
+                let stream = ReaderStream::with_capacity(file.take(count), STREAM_CHUNK);
                 return (
                     StatusCode::PARTIAL_CONTENT,
                     [
@@ -55,7 +62,7 @@ async fn serve_file(headers: HeaderMap, Query(q): Query<FileQuery>) -> impl Into
                         (header::CONTENT_LENGTH, count.to_string()),
                         (header::ACCEPT_RANGES, "bytes".to_string()),
                     ],
-                    buf,
+                    Body::from_stream(stream),
                 )
                     .into_response();
             }
@@ -67,8 +74,7 @@ async fn serve_file(headers: HeaderMap, Query(q): Query<FileQuery>) -> impl Into
             .into_response();
     }
 
-    let mut buf = Vec::with_capacity(len as usize);
-    let _ = file.read_to_end(&mut buf);
+    let stream = ReaderStream::with_capacity(file, STREAM_CHUNK);
     (
         StatusCode::OK,
         [
@@ -76,7 +82,7 @@ async fn serve_file(headers: HeaderMap, Query(q): Query<FileQuery>) -> impl Into
             (header::CONTENT_LENGTH, len.to_string()),
             (header::ACCEPT_RANGES, "bytes".to_string()),
         ],
-        buf,
+        Body::from_stream(stream),
     )
         .into_response()
 }
@@ -96,6 +102,34 @@ mod tests {
         assert_eq!(mime_for_ext("jpeg"), "image/jpeg");
         assert_eq!(mime_for_ext("png"), "image/png");
         assert_eq!(mime_for_ext("unknown"), "application/octet-stream");
+    }
+
+    #[test]
+    fn range_explicit_bounds() {
+        assert_eq!(parse_byte_range("bytes=0-99", 1000), Some((0, 99)));
+        assert_eq!(parse_byte_range("bytes=500-1999", 1000), Some((500, 999)));
+    }
+
+    #[test]
+    fn range_open_ended_covers_rest_of_file() {
+        assert_eq!(parse_byte_range("bytes=0-", 1000), Some((0, 999)));
+        assert_eq!(parse_byte_range("bytes=990-", 1000), Some((990, 999)));
+    }
+
+    #[test]
+    fn range_suffix_returns_last_n_bytes() {
+        assert_eq!(parse_byte_range("bytes=-100", 1000), Some((900, 999)));
+        // suffix longer than the file clamps to the whole file
+        assert_eq!(parse_byte_range("bytes=-5000", 1000), Some((0, 999)));
+    }
+
+    #[test]
+    fn range_invalid_is_rejected() {
+        assert_eq!(parse_byte_range("bytes=1000-", 1000), None); // start past EOF
+        assert_eq!(parse_byte_range("bytes=50-10", 1000), None); // inverted
+        assert_eq!(parse_byte_range("bytes=-0", 1000), None); // empty suffix
+        assert_eq!(parse_byte_range("bytes=-", 1000), None);
+        assert_eq!(parse_byte_range("items=0-10", 1000), None); // wrong unit
     }
 }
 
@@ -120,9 +154,19 @@ fn mime_for_ext(ext: &str) -> &'static str {
 fn parse_byte_range(range_str: &str, len: u64) -> Option<(u64, u64)> {
     let s = range_str.strip_prefix("bytes=")?;
     let dash = s.find('-')?;
-    let start: u64 = s[..dash].trim().parse().ok()?;
+    let start_str = s[..dash].trim();
+    // Suffix form `bytes=-N`: the last N bytes (GStreamer probes trailing
+    // metadata like the mp4 moov atom this way).
+    if start_str.is_empty() {
+        let suffix: u64 = s[dash + 1..].trim().parse().ok()?;
+        if suffix == 0 || len == 0 {
+            return None;
+        }
+        return Some((len.saturating_sub(suffix), len - 1));
+    }
+    let start: u64 = start_str.parse().ok()?;
     let end: u64 = s[dash + 1..].trim().parse().unwrap_or(len.saturating_sub(1));
-    if start >= len {
+    if start >= len || end < start {
         return None;
     }
     Some((start, end.min(len - 1)))

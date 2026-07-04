@@ -5,7 +5,7 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import { probeClip, exportTrim, exportCompressed, cancelExport, prepareAudioTracks, getAppRoot, addToLibrary, listLibrary, removeFromLibrary, rescanLibrary, setClipFavorite, renameLibraryClip, createFolder, listFolders, deleteFolder, addClipToFolder, removeClipFromFolder, listClipsInFolder, listUnsortedLibrary, ensureProxy, type ClipMeta, type ClipRow, type ExportMode, type ExportProgress, type Folder, type TrackConfig, type SetupResult } from "./api";
 import { exportSequence, type MusicOverlay } from "./api";
 import { newClipBelongsInView, applyFavorite, applyRename, type LibraryView } from "./libraryView";
-import { previewPath, shouldTryProxy } from "./preview";
+import { audioSyncCommand, previewPath, shouldTryProxy } from "./preview";
 import { moveSegment, removeSegment, sequenceDuration, toBackendSegments, type SequenceSegment } from "./sequence";
 import { isCustomSelectionValid, resolveTargetMb, TARGET_SIZE_PRESETS } from "./exportOptions";
 import { setIn, setOut } from "./trim";
@@ -32,7 +32,6 @@ function App() {
   const [inPoint, setInPoint] = useState<number | null>(null);
   const [outPoint, setOutPoint] = useState<number | null>(null);
   const [status, setStatus] = useState<string | null>(null);
-  const [currentTime, setCurrentTime] = useState(0);
   const [library, setLibrary] = useState<ClipRow[]>([]);
   const [folders, setFolders] = useState<Folder[]>([]);
   const [activeView, setActiveView] = useState<LibraryView>({ kind: "all" });
@@ -267,6 +266,30 @@ function App() {
     audioElsRef.current.forEach(a => a.pause());
   }
 
+  // Periodic drift/stall correction, driven by the video's timeupdate (a few
+  // times a second). Audio elements run on their own pipelines and can stall
+  // on a buffer underrun without ever resuming, or drift off the video clock;
+  // this nudges them back. Deliberately no setState — playback must not
+  // re-render the app.
+  function onVideoTimeUpdate() {
+    const v = videoRef.current;
+    if (!v) return;
+    for (const a of audioElsRef.current) {
+      const cmd = audioSyncCommand(v.currentTime, v.paused, a.currentTime, a.paused);
+      if (cmd.seek) a.currentTime = v.currentTime;
+      if (cmd.play) {
+        audioCtxRef.current?.resume();
+        a.play().catch(() => {});
+      }
+    }
+  }
+
+  // While the video rebuffers, park the audio so it doesn't run ahead;
+  // onPlaying (→ onVideoPlay) resyncs and resumes it.
+  function onVideoWaiting() {
+    audioElsRef.current.forEach(a => a.pause());
+  }
+
   // The native <video controls> bar exposes its own volume/mute button that
   // operates directly on the DOM element, bypassing React entirely — a user
   // clicking it (or dragging the slider) unmutes the element's own decoded
@@ -451,7 +474,6 @@ function App() {
     setInPoint(null);
     setOutPoint(null);
     setStatus(null);
-    setCurrentTime(0);
 
     // Reset audio state for the new clip
     setAudioReady(false);
@@ -802,6 +824,7 @@ function App() {
                     </span>
                   )}
                   <span className="library-meta">
+                    {entry.favorite && <span className="fav-inline">★ </span>}
                     {entry.durationSecs.toFixed(1)}s · {entry.width}×{entry.height}
                   </span>
                 </div>
@@ -906,8 +929,10 @@ function App() {
               muted={audioReady}
               className="video-player"
               style={{ maxHeight: `${videoHeight.size}vh` }}
-              onTimeUpdate={e => setCurrentTime(e.currentTarget.currentTime)}
+              onTimeUpdate={onVideoTimeUpdate}
               onPlay={onVideoPlay}
+              onPlaying={onVideoPlay}
+              onWaiting={onVideoWaiting}
               onPause={onVideoPause}
               onSeeked={onVideoSeeked}
               onVolumeChange={onVideoVolumeChange}
@@ -990,7 +1015,7 @@ function App() {
             {meta && (
               <Timeline
                 duration={meta.durationSecs}
-                currentTime={currentTime}
+                videoRef={videoRef}
                 inPoint={inPoint}
                 outPoint={outPoint}
                 onSeek={seekTo}

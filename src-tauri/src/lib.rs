@@ -76,7 +76,9 @@ async fn prepare_audio_tracks(
 
     let mut results = Vec::new();
     for &idx in &stream_indices {
-        let out_path = tmp_dir.join(format!("clipsnip-a{idx}-{path_hash:x}.m4a"));
+        // "fs" marks faststart output — older cache files without it lack the
+        // up-front moov atom and would force an extra end-of-file fetch.
+        let out_path = tmp_dir.join(format!("clipsnip-a{idx}-{path_hash:x}-fs.m4a"));
         let out_str = out_path.to_string_lossy().to_string();
 
         if !out_path.exists() {
@@ -91,6 +93,9 @@ async fn prepare_audio_tracks(
                     "-vn",
                     "-c:a", "aac",
                     "-b:a", "192k",
+                    // moov atom up front so playback starts from a single
+                    // progressive request instead of seeking to EOF first.
+                    "-movflags", "+faststart",
                     &out_str,
                 ])
                 .output()
