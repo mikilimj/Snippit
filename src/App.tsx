@@ -10,6 +10,7 @@ import { moveSegment, removeSegment, sequenceDuration, toBackendSegments, type S
 import { isCustomSelectionValid, resolveTargetMb, TARGET_SIZE_PRESETS } from "./exportOptions";
 import { setIn, setOut } from "./trim";
 import { Timeline } from "./Timeline";
+import { useResizable } from "./useResizable";
 import { FirstRunWizard } from "./FirstRunWizard";
 import { SettingsModal } from "./SettingsModal";
 import logo from "./assets/logo.png";
@@ -49,6 +50,20 @@ function App() {
   const [segments, setSegments] = useState<SequenceSegment[]>([]);
   const [music, setMusic] = useState<MusicOverlay | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const sidebar = useResizable({
+    axis: "x",
+    defaultSize: 224,
+    min: 184,
+    max: 480,
+    storageKey: "clipsnip:sidebarWidth",
+  });
+  const videoHeight = useResizable({
+    axis: "y",
+    defaultSize: 50,
+    min: 25,
+    max: 85,
+    storageKey: "clipsnip:videoMaxHeightVh",
+  });
   // `undefined` = still checking, `null` = needs first-run setup, string = configured root
   const [appRoot, setAppRoot] = useState<string | null | undefined>(undefined);
 
@@ -649,7 +664,7 @@ function App() {
     <div className="app-layout">
       {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
       {/* Library sidebar */}
-      <aside className="library-panel">
+      <aside className="library-panel" style={{ width: sidebar.size }}>
         <div className="brand-row">
           <img className="brand-logo" src={logo} alt="" />
           <span className="brand-name">ClipSnip</span>
@@ -845,6 +860,14 @@ function App() {
         )}
       </aside>
 
+      <div
+        className="resize-handle-x"
+        onPointerDown={sidebar.onPointerDown}
+        onPointerMove={sidebar.onPointerMove}
+        onPointerUp={sidebar.onPointerUp}
+        onPointerCancel={sidebar.onPointerUp}
+      />
+
       {/* Editor area */}
       <main className="editor-panel">
         {!path && (
@@ -882,12 +905,21 @@ function App() {
               controls
               muted={audioReady}
               className="video-player"
+              style={{ maxHeight: `${videoHeight.size}vh` }}
               onTimeUpdate={e => setCurrentTime(e.currentTarget.currentTime)}
               onPlay={onVideoPlay}
               onPause={onVideoPause}
               onSeeked={onVideoSeeked}
               onVolumeChange={onVideoVolumeChange}
               onError={handleVideoError}
+            />
+
+            <div
+              className="resize-handle-y"
+              onPointerDown={videoHeight.onPointerDown}
+              onPointerMove={videoHeight.onPointerMove}
+              onPointerUp={videoHeight.onPointerUp}
+              onPointerCancel={videoHeight.onPointerUp}
             />
 
             {proxyStatus && (
