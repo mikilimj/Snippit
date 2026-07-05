@@ -76,6 +76,7 @@ function App() {
   const trackConfigsRef = useRef<TrackConfig[]>([]);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const audioElsRef = useRef<HTMLAudioElement[]>([]);
+  const sourceNodesRef = useRef<MediaElementAudioSourceNode[]>([]);
   const gainNodesRef = useRef<GainNode[]>([]);
   // Set when the user hits Escape so the imminent blur cancels instead of commits.
   const renameCancelRef = useRef(false);
@@ -187,9 +188,22 @@ function App() {
   }, [audioReady]);
 
   // ── Tear down Web Audio nodes and <audio> elements ───────────────────────────
+  // Must be deterministic, not GC-driven: on WebKitGTK every media element owns
+  // a GStreamer pipeline holding an open HTTP connection to the media server,
+  // and the WebView caps connections per host. Elements that are merely paused
+  // with their src cleared keep those connections until some later GC — after a
+  // few clip switches the cap fills with zombie streams and the *active* video
+  // starves (stutter + tiny backward resync jumps). removeAttribute + load()
+  // aborts the fetch and destroys the pipeline immediately.
   function teardownAudio() {
+    sourceNodesRef.current.forEach(s => s.disconnect());
     gainNodesRef.current.forEach(g => g.disconnect());
-    audioElsRef.current.forEach(a => { a.pause(); a.src = ""; });
+    audioElsRef.current.forEach(a => {
+      a.pause();
+      a.removeAttribute("src");
+      a.load();
+    });
+    sourceNodesRef.current = [];
     gainNodesRef.current = [];
     audioElsRef.current = [];
   }
@@ -232,6 +246,7 @@ function App() {
       gain.connect(ctx.destination);
 
       audioElsRef.current.push(audioEl);
+      sourceNodesRef.current.push(source);
       gainNodesRef.current.push(gain);
     }
 
@@ -472,6 +487,17 @@ function App() {
 
   // ── Open clip ─────────────────────────────────────────────────────────────────
   async function openClip(p: string) {
+    // The <video> is keyed by path, so React replaces the element — but the old
+    // element's GStreamer pipeline (and its HTTP connection) would linger until
+    // GC. Kill it now, same reasoning as teardownAudio. Skipped when re-opening
+    // the active clip: the key doesn't change, so the element lives on.
+    const v = videoRef.current;
+    if (v && p !== path) {
+      v.pause();
+      v.removeAttribute("src");
+      v.load();
+    }
+
     setError(null);
     setVideoError(null);
     setProxyPath(null);
