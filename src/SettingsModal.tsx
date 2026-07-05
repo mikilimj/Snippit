@@ -8,6 +8,10 @@ import {
   exportLibrary,
   importLibrary,
   cancelBundle,
+  listExportDevices,
+  getExportDevice,
+  setExportDevice,
+  type ExportDeviceInfo,
   type ExportProgress,
 } from "./api";
 
@@ -37,6 +41,11 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   const [progress, setProgress] = useState<ExportProgress | null>(null);
   const [message, setMessage] = useState<string | null>(null);
 
+  // Export encode device (GPU acceleration, 2026-07-05 design)
+  const [devices, setDevices] = useState<ExportDeviceInfo[] | null>(null);
+  const [device, setDevice] = useState<string>("cpu");
+  const [deviceMsg, setDeviceMsg] = useState<string | null>(null);
+
   // Library bundle (§4.6)
   const [includeFiles, setIncludeFiles] = useState(false);
   const [replace, setReplace] = useState(false);
@@ -48,7 +57,29 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
     getWatchedFolder()
       .then(setWatched)
       .catch(() => setWatched(null));
+    getExportDevice()
+      .then(setDevice)
+      .catch(() => setDevice("cpu"));
+    // Probing runs one tiny ffmpeg encode per candidate on first open; cached after.
+    listExportDevices()
+      .then(setDevices)
+      .catch(err => {
+        console.error("Device probe failed:", err);
+        setDevices([{ id: "cpu", label: "CPU (software x264)", available: true }]);
+      });
   }, []);
+
+  async function chooseDevice(id: string) {
+    const previous = device;
+    setDevice(id);
+    setDeviceMsg(null);
+    try {
+      await setExportDevice(id);
+    } catch (e) {
+      setDevice(previous);
+      setDeviceMsg(`Couldn't save the device choice: ${e}`);
+    }
+  }
 
   useEffect(() => {
     const unRelocate = listen<ExportProgress>("relocate-progress", e => setProgress(e.payload));
@@ -167,6 +198,32 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
           {message && (
             <div className={/fail/i.test(message) ? "msg-error" : "msg-ok"}>{message}</div>
           )}
+        </div>
+
+        <div className="settings-section">
+          <span className="settings-label">Export encoding</span>
+          <p className="settings-hint">
+            Device used to encode exports (Compatible mode, size targets, and sequences).
+            Fast lossless copies never re-encode, so they're unaffected. GPU encoding is
+            much faster; x264 squeezes slightly better quality into tight size targets.
+          </p>
+          {devices === null ? (
+            <p className="settings-hint">Detecting encoders…</p>
+          ) : (
+            <select
+              className="export-size-select"
+              value={device}
+              onChange={e => chooseDevice(e.target.value)}
+            >
+              {devices.map(d => (
+                <option key={d.id} value={d.id} disabled={!d.available}>
+                  {d.label}
+                  {d.available ? "" : " — not available"}
+                </option>
+              ))}
+            </select>
+          )}
+          {deviceMsg && <div className="msg-error">{deviceMsg}</div>}
         </div>
 
         <div className="settings-section">

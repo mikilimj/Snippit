@@ -17,6 +17,10 @@ pub struct SetupSettings {
     pub ingestion_mode: String,
     pub source_folder: Option<String>,
     pub created_at: u64,
+    /// Export encode device id ("cpu", "vaapi", "nvenc", …). `#[serde(default)]`
+    /// keeps settings.json files from before this field parseable; None = CPU.
+    #[serde(default)]
+    pub export_device: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -164,6 +168,7 @@ pub fn complete_setup_at(
         ingestion_mode: ingestion_mode.to_string(),
         source_folder: source_folder.map(|p| p.to_string_lossy().to_string()),
         created_at: now_unix(),
+        export_device: None,
     };
     write_settings(root, &settings)?;
     write_pointer_file(config_dir, &root.to_string_lossy())?;
@@ -292,11 +297,25 @@ mod tests {
             ingestion_mode: "watch".to_string(),
             source_folder: Some("/rec/out".to_string()),
             created_at: 42,
+            export_device: Some("vaapi".to_string()),
         };
         write_settings(&root, &settings).unwrap();
         let read = read_settings(&root).unwrap();
         assert_eq!(read.ingestion_mode, "watch");
         assert_eq!(read.source_folder, Some("/rec/out".to_string()));
+        assert_eq!(read.export_device, Some("vaapi".to_string()));
+    }
+
+    #[test]
+    fn read_settings_parses_files_written_before_export_device_existed() {
+        let root = temp_subdir("read_settings_legacy");
+        fs::write(
+            root.join("settings.json"),
+            r#"{"ingestion_mode":"watch","source_folder":"/rec","created_at":1}"#,
+        )
+        .unwrap();
+        let read = read_settings(&root).unwrap();
+        assert_eq!(read.export_device, None);
     }
 
     #[test]

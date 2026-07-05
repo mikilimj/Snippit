@@ -10,7 +10,8 @@ mod media_server;
 
 use export::{
     build_compress_pass_args, build_sequence_args, build_trim_args, build_trim_compatible_args,
-    compute_target_bitrates, parse_progress_line, validate_trim, MusicOverlay, Segment, TrackConfig,
+    compute_target_bitrates, parse_progress_line, validate_trim, ExportDevice, MusicOverlay,
+    Segment, SequenceTarget, TrackConfig,
 };
 use probe::{parse_ffprobe_json, ClipMeta};
 use serde::Serialize;
@@ -29,6 +30,125 @@ struct MediaPort(u16);
 #[tauri::command]
 fn get_media_port(state: tauri::State<MediaPort>) -> u16 {
     state.0
+}
+
+// ── Export encode device (GPU acceleration, 2026-07-05 design) ─────────────────
+
+/// Cached hardware-encoder probe results — probing costs one tiny ffmpeg run per
+/// candidate, and availability can't change without a driver swap, so once per
+/// app launch is plenty.
+#[derive(Default)]
+struct DeviceProbe(tokio::sync::Mutex<Option<Vec<ExportDeviceInfo>>>);
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ExportDeviceInfo {
+    id: String,
+    label: String,
+    available: bool,
+}
+
+/// Hardware encoder candidates worth probing on this OS.
+fn device_candidates() -> Vec<ExportDevice> {
+    if cfg!(target_os = "macos") {
+        vec![ExportDevice::VideoToolbox]
+    } else if cfg!(windows) {
+        vec![ExportDevice::Nvenc, ExportDevice::Amf, ExportDevice::Qsv]
+    } else {
+        vec![ExportDevice::Vaapi, ExportDevice::Nvenc, ExportDevice::Qsv]
+    }
+}
+
+/// True if `device` can actually encode on this machine. Every hardware encoder
+/// is compiled into the sidecar regardless of the hardware present, so the only
+/// reliable signal is a functional probe: encode a frame of black into the null
+/// muxer and see whether ffmpeg exits cleanly.
+async fn probe_device(app: &tauri::AppHandle, device: ExportDevice) -> bool {
+    let mut args: Vec<String> = vec!["-v".into(), "error".into()];
+    args.extend(device.global_args());
+    args.extend([
+        "-f".to_string(),
+        "lavfi".to_string(),
+        "-i".to_string(),
+        "color=black:s=128x128:d=0.1".to_string(),
+    ]);
+    if let Some(suffix) = device.filter_suffix() {
+        args.extend(["-vf".to_string(), suffix.to_string()]);
+    }
+    args.extend([
+        "-c:v".to_string(),
+        device.encoder().to_string(),
+        "-f".to_string(),
+        "null".to_string(),
+        "-".to_string(),
+    ]);
+    let Ok(cmd) = app.shell().sidecar("ffmpeg") else {
+        return false;
+    };
+    match cmd.args(args).output().await {
+        Ok(out) => out.status.success(),
+        Err(_) => false,
+    }
+}
+
+/// Lists CPU + every probed hardware device, with availability. Probes once per
+/// launch and serves the cached result afterwards.
+#[tauri::command]
+async fn list_export_devices(app: tauri::AppHandle) -> Result<Vec<ExportDeviceInfo>, String> {
+    let state = app.state::<DeviceProbe>();
+    let mut cache = state.0.lock().await;
+    if let Some(cached) = cache.as_ref() {
+        return Ok(cached.clone());
+    }
+    let mut devices = vec![ExportDeviceInfo {
+        id: ExportDevice::Cpu.id().to_string(),
+        label: ExportDevice::Cpu.label().to_string(),
+        available: true,
+    }];
+    for candidate in device_candidates() {
+        devices.push(ExportDeviceInfo {
+            id: candidate.id().to_string(),
+            label: candidate.label().to_string(),
+            available: probe_device(&app, candidate).await,
+        });
+    }
+    *cache = Some(devices.clone());
+    Ok(devices)
+}
+
+/// The device id configured for exports ("cpu" when unset or before setup).
+#[tauri::command]
+fn get_export_device(app: tauri::AppHandle) -> String {
+    current_export_device(&app).id().to_string()
+}
+
+/// Persists the export device choice into `<root>/settings.json`.
+#[tauri::command]
+fn set_export_device(app: tauri::AppHandle, device: String) -> Result<(), String> {
+    let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    let root = setup::read_pointer_file(&config_dir)
+        .ok_or_else(|| "Library is not set up yet".to_string())?;
+    let root_path = std::path::Path::new(&root);
+    let mut settings =
+        setup::read_settings(root_path).ok_or_else(|| "No settings found.".to_string())?;
+    settings.export_device = Some(ExportDevice::from_id(&device).id().to_string());
+    setup::write_settings(root_path, &settings)
+}
+
+/// Resolves the configured export device, defaulting to CPU when setup hasn't
+/// run, the field is unset, or the id is unknown.
+fn current_export_device(app: &tauri::AppHandle) -> ExportDevice {
+    let device = app
+        .path()
+        .app_config_dir()
+        .ok()
+        .and_then(|dir| setup::read_pointer_file(&dir))
+        .and_then(|root| setup::read_settings(std::path::Path::new(&root)))
+        .and_then(|s| s.export_device);
+    match device {
+        Some(id) => ExportDevice::from_id(&id),
+        None => ExportDevice::Cpu,
+    }
 }
 
 /// Runs ffprobe on a path and parses its metadata. Shared by the `probe_clip`
@@ -251,8 +371,10 @@ async fn export_trim(
 
     let duration = out_secs - in_secs;
     let args = if mode == "compatible" {
-        build_trim_compatible_args(&source, in_secs, out_secs, &output, &track_configs)
+        let device = current_export_device(&app);
+        build_trim_compatible_args(&source, in_secs, out_secs, &output, &track_configs, &device)
     } else {
+        // Fast mode stream-copies — no encode, so the device setting is irrelevant.
         build_trim_args(&source, in_secs, out_secs, &output, &track_configs)
     };
 
@@ -288,17 +410,23 @@ async fn export_compressed(
         .cancelled
         .store(false, Ordering::SeqCst);
     let duration = out_secs - in_secs;
+    let device = current_export_device(&app);
 
-    // Two passes map onto the overall bar as [0, 0.5] (analyze) and [0.5, 1.0]
-    // (encode). Cancel/failure short-circuits, then the pass logs are cleaned up.
+    // On CPU, two passes map onto the overall bar as [0, 0.5] (analyze) and
+    // [0.5, 1.0] (encode); hardware encoders can't two-pass, so they run a single
+    // full-bar VBV-capped pass. Cancel/failure short-circuits, then the pass logs
+    // are cleaned up.
+    let passes: &[u8] = if device.supports_two_pass() { &[1, 2] } else { &[2] };
+    let span = 1.0 / passes.len() as f64;
     let mut outcome: Result<RunOutcome, String> = Ok(RunOutcome::Done);
-    for (idx, pass) in [1u8, 2u8].into_iter().enumerate() {
+    for (idx, &pass) in passes.iter().enumerate() {
         let args = build_compress_pass_args(
             &source, in_secs, out_secs, &output, &track_configs,
-            video_kbps, audio_kbps, pass, &passlog_str,
+            video_kbps, audio_kbps, pass, &passlog_str, &device,
         );
         let phase = if pass == 1 { "Analyzing" } else { "Compressing" };
-        outcome = run_ffmpeg_with_progress(&app, args, duration, phase, idx as f64 * 0.5, 0.5).await;
+        outcome =
+            run_ffmpeg_with_progress(&app, args, duration, phase, idx as f64 * span, span).await;
         match &outcome {
             Ok(RunOutcome::Done) => {}
             _ => break, // cancelled or errored
@@ -317,13 +445,16 @@ async fn export_compressed(
 
 /// Stitches an ordered list of trimmed segments into one clip, optionally mixing
 /// in a music overlay (spec §4.3). The output resolution is taken from the first
-/// segment; the whole job re-encodes to H.264/AAC. Progress/cancel as per §4.5.
+/// segment; the whole job re-encodes to H.264/AAC. With `target_mb` the sequence
+/// is compressed to that size like a single-clip export (two-pass on CPU,
+/// single-pass VBV on GPU). Progress/cancel as per §4.5.
 #[tauri::command]
 async fn export_sequence(
     app: tauri::AppHandle,
     segments: Vec<Segment>,
     music: Option<MusicOverlay>,
     output: String,
+    target_mb: Option<f64>,
 ) -> Result<String, String> {
     if segments.is_empty() {
         return Err("Add at least one clip to the sequence first.".to_string());
@@ -350,8 +481,52 @@ async fn export_sequence(
     app.state::<ExportJob>()
         .cancelled
         .store(false, Ordering::SeqCst);
-    let args = build_sequence_args(&segments, first.width, first.height, music.as_ref(), &output);
-    match run_ffmpeg_with_progress(&app, args, total, "Stitching", 0.0, 1.0).await? {
+    let device = current_export_device(&app);
+
+    let bitrates = match target_mb {
+        Some(mb) => Some(compute_target_bitrates(mb, total)?),
+        None => None,
+    };
+
+    let mut hasher = DefaultHasher::new();
+    output.hash(&mut hasher);
+    let passlog = std::env::temp_dir().join(format!("clipsnip-seq2pass-{:x}", hasher.finish()));
+    let passlog_str = passlog.to_string_lossy().to_string();
+
+    // Quality mode is one pass; a size target adds a CPU analysis pass first.
+    let passes: &[u8] = match &bitrates {
+        Some(_) if device.supports_two_pass() => &[1, 2],
+        _ => &[2],
+    };
+    let span = 1.0 / passes.len() as f64;
+    let mut outcome: Result<RunOutcome, String> = Ok(RunOutcome::Done);
+    for (idx, &pass) in passes.iter().enumerate() {
+        let target = bitrates.map(|(video_kbps, audio_kbps)| SequenceTarget {
+            video_kbps,
+            audio_kbps,
+            pass,
+            passlog: passlog_str.clone(),
+        });
+        let args = build_sequence_args(
+            &segments, first.width, first.height, music.as_ref(), &output, &device,
+            target.as_ref(),
+        );
+        let phase = if pass == 1 { "Analyzing" } else { "Stitching" };
+        outcome =
+            run_ffmpeg_with_progress(&app, args, total, phase, idx as f64 * span, span).await;
+        match &outcome {
+            Ok(RunOutcome::Done) => {}
+            _ => break, // cancelled or errored
+        }
+    }
+
+    if bitrates.is_some() {
+        for suffix in ["-0.log", "-0.log.mbtree"] {
+            let _ = std::fs::remove_file(format!("{passlog_str}{suffix}"));
+        }
+    }
+
+    match outcome? {
         RunOutcome::Done => Ok(output),
         RunOutcome::Cancelled => Err("Export cancelled.".to_string()),
     }
@@ -463,6 +638,7 @@ async fn relocate_watched_folder(app: tauri::AppHandle, dest: String) -> Result<
         ingestion_mode: settings.ingestion_mode,
         source_folder: Some(dest.clone()),
         created_at: settings.created_at,
+        export_device: settings.export_device,
     };
     setup::write_settings(&root_path, &updated)?;
     Ok(dest)
@@ -1040,6 +1216,7 @@ pub fn run() {
             app.manage(ExportJob::default());
             app.manage(RelocateJob::default());
             app.manage(BundleJob::default());
+            app.manage(DeviceProbe::default());
             // Start auto-import if already configured; a first-run launch starts
             // it from complete_setup instead.
             start_watching(app.handle());
@@ -1076,7 +1253,10 @@ pub fn run() {
             cancel_relocate,
             export_library,
             import_library,
-            cancel_bundle
+            cancel_bundle,
+            list_export_devices,
+            get_export_device,
+            set_export_device
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

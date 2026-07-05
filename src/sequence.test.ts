@@ -8,7 +8,7 @@ import {
 } from "./sequence";
 
 function s(id: number, inSecs: number, outSecs: number): SequenceSegment {
-  return { id, path: `/v/${id}.mp4`, displayName: `${id}`, inSecs, outSecs };
+  return { id, path: `/v/${id}.mp4`, displayName: `${id}`, inSecs, outSecs, tracks: [] };
 }
 
 describe("moveSegment", () => {
@@ -50,6 +50,21 @@ describe("sequenceDuration", () => {
 describe("toBackendSegments", () => {
   it("maps UI segments to the Rust Segment shape (path -> input)", () => {
     const list = [s(1, 0.5, 3.5)];
-    expect(toBackendSegments(list)).toEqual([{ input: "/v/1.mp4", inSecs: 0.5, outSecs: 3.5 }]);
+    expect(toBackendSegments(list)).toEqual([
+      { input: "/v/1.mp4", inSecs: 0.5, outSecs: 3.5, tracks: [] },
+    ]);
+  });
+
+  it("carries the snapshotted track configs through as copies", () => {
+    const seg: SequenceSegment = {
+      ...s(1, 0, 2),
+      tracks: [
+        { streamIndex: 1, enabled: true, volume: 1 },
+        { streamIndex: 2, enabled: false, volume: 0.5 },
+      ],
+    };
+    const [backend] = toBackendSegments([seg]);
+    expect(backend.tracks).toEqual(seg.tracks);
+    expect(backend.tracks[0]).not.toBe(seg.tracks[0]); // defensive copy
   });
 });
