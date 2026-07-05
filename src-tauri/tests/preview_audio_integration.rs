@@ -19,8 +19,13 @@ fn generate_tone_m4a(path: &str, secs: u32) {
 }
 
 fn decode_chunk(src: &str, start: f64, dur: f64) -> Vec<u8> {
+    let out_path = std::env::temp_dir().join(format!(
+        "clipsnip_test_chunk_{}_{start}_{dur}.wav",
+        std::process::id()
+    ));
+    let out_s = out_path.to_str().unwrap();
     let out = Command::new("ffmpeg")
-        .args(build_audio_chunk_args(src, start, dur))
+        .args(build_audio_chunk_args(src, start, dur, out_s))
         .output()
         .expect("ffmpeg chunk decode runs");
     assert!(
@@ -28,7 +33,9 @@ fn decode_chunk(src: &str, start: f64, dur: f64) -> Vec<u8> {
         "chunk decode failed: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    out.stdout
+    let bytes = std::fs::read(&out_path).expect("chunk file exists");
+    let _ = std::fs::remove_file(&out_path);
+    bytes
 }
 
 /// Extracts the PCM payload that follows the `data` chunk header.

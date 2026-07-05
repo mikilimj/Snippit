@@ -76,15 +76,15 @@ export class ChunkedAudioEngine {
   }
 
   /**
-   * Halt output instantly. Suspending the context (not just stopping sources)
-   * mirrors the old behaviour: it silences samples already queued in the OS
-   * sink instead of letting them play out.
+   * Halt output instantly by stopping every scheduled source. The context is
+   * deliberately left running: on WebKitGTK suspend()/resume() tears down and
+   * recreates the system sink, so each pause/play cycle would register a brand
+   * new OS audio stream. Stopped sources are sample-accurate silence anyway.
    */
   pause() {
     if (this.disposed) return;
     this.playing = false;
     this.stopSources();
-    void this.ctx.suspend().catch(() => {});
   }
 
   seek(at: number) {

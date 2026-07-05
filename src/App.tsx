@@ -75,6 +75,9 @@ function App() {
   // Video-only remux of the active preview source; loaded once the audio engine
   // owns playback so the <video> stops registering an OS audio stream.
   const [videoOnlyPath, setVideoOnlyPath] = useState<string | null>(null);
+  // Remux result waiting for the engine to take over — built eagerly at probe
+  // time so the swap can happen the instant audio is ready.
+  const [preparedVideoOnly, setPreparedVideoOnly] = useState<string | null>(null);
 
   // Refs that live outside React's render cycle
   const trackConfigsRef = useRef<TrackConfig[]>([]);
@@ -251,8 +254,9 @@ function App() {
     if (v) engineRef.current?.play(v.currentTime);
   }
 
-  // pause() suspends the AudioContext, not just the sources — suspending halts
-  // samples already queued in the OS sink instead of letting them play out.
+  // pause() stops the scheduled sources; the AudioContext keeps running so the
+  // app's one OS audio stream survives pause/play cycles (suspending it makes
+  // WebKitGTK register a fresh sink-input on every resume).
   function onVideoPause() {
     engineRef.current?.pause();
   }
@@ -352,21 +356,20 @@ function App() {
   }
 
   // ── Video-only source swap ─────────────────────────────────────────────────────
-  // Once the engine owns all audio, remux the active preview source into a
-  // video-only copy and switch the <video> to it. A file with no audio track
-  // never gets an audio pipeline in the WebView, so the element stops
-  // registering its own (muted) stream with the OS mixer — leaving the shared
-  // AudioContext as the app's single stream on Linux and Windows alike.
+  // A file with no audio track never gets an audio pipeline in the WebView, so
+  // a remuxed <video> source stops registering its own (muted) stream with the
+  // OS mixer — leaving the shared AudioContext as the app's single stream on
+  // Linux and Windows alike. The remux starts as soon as the clip is probed
+  // (it's a stream copy, usually near-instant) so the window where the original
+  // — with its audio pipeline — is on screen stays as short as possible.
   useEffect(() => {
-    if (!audioReady || !path || videoOnlyFailedRef.current) return;
+    if (!path || !meta || meta.audioTracks.length === 0 || videoOnlyFailedRef.current) return;
     const source = proxyPath ?? path;
     let cancelled = false;
     prepareVideoOnly(source)
       .then(vo => {
         if (cancelled || videoOnlyFailedRef.current) return;
-        const v = videoRef.current;
-        restoreAfterSwapRef.current = v ? { time: v.currentTime, paused: v.paused } : null;
-        setVideoOnlyPath(vo);
+        setPreparedVideoOnly(vo);
       })
       .catch(err => {
         // Not fatal: playback continues from the muted original.
@@ -375,7 +378,16 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [audioReady, path, proxyPath]);
+  }, [meta, path, proxyPath]);
+
+  // Apply the prepared remux only once the engine owns audio — swapping earlier
+  // would silence the clip (the remux has no audio to fall back on).
+  useEffect(() => {
+    if (!preparedVideoOnly || !audioReady || videoOnlyFailedRef.current) return;
+    const v = videoRef.current;
+    restoreAfterSwapRef.current = v ? { time: v.currentTime, paused: v.paused } : null;
+    setVideoOnlyPath(preparedVideoOnly);
+  }, [preparedVideoOnly, audioReady]);
 
   // ── Keyboard shortcuts ────────────────────────────────────────────────────────
   function markIn() {
@@ -544,6 +556,7 @@ function App() {
     setTrackConfigs([]);
     setAudioPreparingMsg(null);
     setVideoOnlyPath(null);
+    setPreparedVideoOnly(null);
     videoOnlyFailedRef.current = false;
     restoreAfterSwapRef.current = null;
     teardownAudio();

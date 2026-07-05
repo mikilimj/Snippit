@@ -78,15 +78,20 @@ pub fn proxy_path(cache_dir: &Path, source: &str, mtime: i64) -> PathBuf {
 pub const AUDIO_CHUNK_PREROLL: f64 = 1.0;
 
 /// FFmpeg arguments to decode one time window of an extracted preview audio
-/// track to 16-bit PCM WAV on stdout. The frontend schedules these chunks on a
+/// track to a 16-bit PCM WAV file. The frontend schedules these chunks on a
 /// single shared AudioContext instead of per-track <audio> elements, so the app
 /// registers exactly one audio stream with the OS mixer. The input seek is a
 /// fast packet-level jump to `start - PREROLL`; the output-side `-ss`/`-t` then
 /// trim to the exact sample window, which keeps adjacent chunks gapless.
-pub fn build_audio_chunk_args(track_path: &str, start: f64, dur: f64) -> Vec<String> {
+///
+/// The WAV goes to a temp file, never to stdout: the shell plugin's `output()`
+/// collects stdout line by line and re-joins with `\n`, which mangles binary
+/// PCM (every 0x0A byte is a "line break") into loud static.
+pub fn build_audio_chunk_args(track_path: &str, start: f64, dur: f64, out_path: &str) -> Vec<String> {
     let pre = (start - AUDIO_CHUNK_PREROLL).max(0.0);
     let out_ss = start - pre;
     vec![
+        "-y".into(),
         "-v".into(),
         "error".into(),
         "-ss".into(),
@@ -101,7 +106,7 @@ pub fn build_audio_chunk_args(track_path: &str, start: f64, dur: f64) -> Vec<Str
         "pcm_s16le".into(),
         "-f".into(),
         "wav".into(),
-        "-".into(),
+        out_path.into(),
     ]
 }
 
@@ -241,7 +246,7 @@ mod tests {
 
     #[test]
     fn audio_chunk_args_preroll_input_seek_and_exact_output_trim() {
-        let args = build_audio_chunk_args("/tmp/track.m4a", 40.0, 20.0);
+        let args = build_audio_chunk_args("/tmp/track.m4a", 40.0, 20.0, "/tmp/chunk.wav");
         let i = args.iter().position(|a| a == "-i").unwrap();
         // Fast input seek to start-preroll, then exact output-side -ss/-t trim.
         let in_ss = args.iter().position(|a| a == "-ss").unwrap();
@@ -255,14 +260,17 @@ mod tests {
         assert_eq!(args[t + 1], "20");
         assert!(args.windows(2).any(|w| w[0] == "-acodec" && w[1] == "pcm_s16le"));
         assert!(args.windows(2).any(|w| w[0] == "-f" && w[1] == "wav"));
-        assert_eq!(args.last().unwrap(), "-"); // stdout, no temp file
+        // A temp file, NEVER stdout — the shell plugin line-splits stdout and
+        // corrupts binary PCM.
+        assert_eq!(args.last().unwrap(), "/tmp/chunk.wav");
+        assert!(args.iter().any(|a| a == "-y")); // overwrite a stale temp file
     }
 
     #[test]
     fn audio_chunk_args_clamp_preroll_at_file_start() {
         // A chunk starting inside the preroll window seeks to 0 and trims the
         // real start on the output side.
-        let args = build_audio_chunk_args("/tmp/track.m4a", 0.4, 20.0);
+        let args = build_audio_chunk_args("/tmp/track.m4a", 0.4, 20.0, "/tmp/chunk.wav");
         let i = args.iter().position(|a| a == "-i").unwrap();
         let in_ss = args.iter().position(|a| a == "-ss").unwrap();
         assert!(in_ss < i);

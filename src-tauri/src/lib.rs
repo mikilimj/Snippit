@@ -248,18 +248,32 @@ async fn audio_chunk(
     if !(start.is_finite() && dur.is_finite() && dur > 0.0) {
         return Err(format!("invalid chunk window: start={start} dur={dur}"));
     }
+    // ffmpeg writes the WAV to a unique temp file which is read back and
+    // deleted. NEVER capture it from stdout: the shell plugin collects stdout
+    // line by line and re-joins with '\n', which corrupts binary PCM into
+    // deafening static (every 0x0A byte is treated as a line break).
+    static CHUNK_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = CHUNK_SEQ.fetch_add(1, Ordering::Relaxed);
+    let out = std::env::temp_dir().join(format!(
+        "clipsnip-chunk-{}-{seq}.wav",
+        std::process::id()
+    ));
+    let out_str = out.to_string_lossy().to_string();
+
     let result = app
         .shell()
         .sidecar("ffmpeg")
         .map_err(|e| e.to_string())?
-        .args(media::build_audio_chunk_args(&path, start.max(0.0), dur))
+        .args(media::build_audio_chunk_args(&path, start.max(0.0), dur, &out_str))
         .output()
         .await
         .map_err(|e| e.to_string())?;
     if !result.status.success() {
+        let _ = std::fs::remove_file(&out);
         return Err(String::from_utf8_lossy(&result.stderr).to_string());
     }
-    let mut bytes = result.stdout;
+    let mut bytes = std::fs::read(&out).map_err(|e| e.to_string())?;
+    let _ = std::fs::remove_file(&out);
     if !media::patch_wav_sizes(&mut bytes) {
         return Err("ffmpeg produced no decodable audio for this chunk".to_string());
     }
