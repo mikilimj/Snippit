@@ -2,10 +2,11 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { probeClip, exportTrim, exportCompressed, cancelExport, prepareAudioTracks, getAppRoot, addToLibrary, listLibrary, removeFromLibrary, rescanLibrary, setClipFavorite, renameLibraryClip, createFolder, listFolders, deleteFolder, addClipToFolder, removeClipFromFolder, listClipsInFolder, listUnsortedLibrary, ensureProxy, type ClipMeta, type ClipRow, type ExportMode, type ExportProgress, type Folder, type TrackConfig, type SetupResult } from "./api";
+import { probeClip, exportTrim, exportCompressed, cancelExport, prepareAudioTracks, prepareVideoOnly, getAppRoot, addToLibrary, listLibrary, removeFromLibrary, rescanLibrary, setClipFavorite, renameLibraryClip, createFolder, listFolders, deleteFolder, addClipToFolder, removeClipFromFolder, listClipsInFolder, listUnsortedLibrary, ensureProxy, type ClipMeta, type ClipRow, type ExportMode, type ExportProgress, type Folder, type TrackConfig, type SetupResult } from "./api";
 import { exportSequence, type MusicOverlay } from "./api";
 import { newClipBelongsInView, applyFavorite, applyRename, type LibraryView } from "./libraryView";
-import { audioSyncCommand, previewPath, shouldTryProxy } from "./preview";
+import { previewPath, shouldTryProxy } from "./preview";
+import { ChunkedAudioEngine } from "./audioEngine";
 import { moveSegment, removeSegment, sequenceDuration, toBackendSegments, type SequenceSegment } from "./sequence";
 import { isCustomSelectionValid, resolveTargetMb, TARGET_SIZE_PRESETS } from "./exportOptions";
 import { setIn, setOut } from "./trim";
@@ -71,13 +72,19 @@ function App() {
   const [audioTrackPaths, setAudioTrackPaths] = useState<string[]>([]);
   const [audioReady, setAudioReady] = useState(false);
   const [audioPreparingMsg, setAudioPreparingMsg] = useState<string | null>(null);
+  // Video-only remux of the active preview source; loaded once the audio engine
+  // owns playback so the <video> stops registering an OS audio stream.
+  const [videoOnlyPath, setVideoOnlyPath] = useState<string | null>(null);
 
   // Refs that live outside React's render cycle
   const trackConfigsRef = useRef<TrackConfig[]>([]);
   const audioCtxRef = useRef<AudioContext | null>(null);
-  const audioElsRef = useRef<HTMLAudioElement[]>([]);
-  const sourceNodesRef = useRef<MediaElementAudioSourceNode[]>([]);
-  const gainNodesRef = useRef<GainNode[]>([]);
+  const engineRef = useRef<ChunkedAudioEngine | null>(null);
+  // Playback position/state to restore after the video-only source swap remounts
+  // the <video> element.
+  const restoreAfterSwapRef = useRef<{ time: number; paused: boolean } | null>(null);
+  // A video-only remux that failed to play is never retried for this clip.
+  const videoOnlyFailedRef = useRef(false);
   // Set when the user hits Escape so the imminent blur cancels instead of commits.
   const renameCancelRef = useRef(false);
 
@@ -187,30 +194,25 @@ function App() {
     if (videoRef.current) videoRef.current.muted = audioReady;
   }, [audioReady]);
 
-  // ── Tear down Web Audio nodes and <audio> elements ───────────────────────────
-  // Must be deterministic, not GC-driven: on WebKitGTK every media element owns
-  // a GStreamer pipeline holding an open HTTP connection to the media server,
-  // and the WebView caps connections per host. Elements that are merely paused
-  // with their src cleared keep those connections until some later GC — after a
-  // few clip switches the cap fills with zombie streams and the *active* video
-  // starves (stutter + tiny backward resync jumps). removeAttribute + load()
-  // aborts the fetch and destroys the pipeline immediately.
+  // ── Tear down the chunked audio engine ────────────────────────────────────────
+  // Deterministic, not GC-driven: the engine holds decoded PCM buffers and live
+  // AudioBufferSourceNodes; dispose stops and disconnects everything at once.
+  // The AudioContext itself is kept for the app's lifetime — it is the ONE audio
+  // stream the app registers with the OS mixer, and recreating it would make the
+  // app flicker in and out of the system volume panel.
   function teardownAudio() {
-    sourceNodesRef.current.forEach(s => s.disconnect());
-    gainNodesRef.current.forEach(g => g.disconnect());
-    audioElsRef.current.forEach(a => {
-      a.pause();
-      a.removeAttribute("src");
-      a.load();
-    });
-    sourceNodesRef.current = [];
-    gainNodesRef.current = [];
-    audioElsRef.current = [];
+    engineRef.current?.dispose();
+    engineRef.current = null;
   }
 
-  // ── (Re-)build Web Audio graph whenever extracted track paths arrive ──────────
+  // ── (Re-)build the audio engine whenever extracted track paths arrive ─────────
+  // Track audio never touches an <audio> element: on WebKitGTK every media
+  // element registers its own (muted) system audio sink even when captured into
+  // Web Audio, which made each track show up as a separate stream in the OS
+  // mixer. The engine schedules ffmpeg-decoded PCM chunks on the shared
+  // AudioContext instead.
   useEffect(() => {
-    if (!mediaPort || audioTrackPaths.length === 0) return;
+    if (audioTrackPaths.length === 0) return;
 
     teardownAudio();
 
@@ -219,96 +221,55 @@ function App() {
     }
     const ctx = audioCtxRef.current;
 
-    for (let i = 0; i < audioTrackPaths.length; i++) {
-      const filePath = audioTrackPaths[i];
-      const url = `http://127.0.0.1:${mediaPort}/file?path=${encodeURIComponent(filePath)}`;
-
-      // crossOrigin must be set BEFORE src so the browser sends a CORS request;
-      // createMediaElementSource requires CORS-clean media when origins differ.
-      const audioEl = new Audio();
-      audioEl.crossOrigin = "anonymous";
-      audioEl.src = url;
-      audioEl.preload = "auto";
-
-      let source: MediaElementAudioSourceNode;
-      try {
-        source = ctx.createMediaElementSource(audioEl);
-      } catch (err) {
-        console.error(`createMediaElementSource failed for track ${i}:`, err);
-        continue;
-      }
-
-      const gain = ctx.createGain();
+    const initialGains = audioTrackPaths.map((_, i) => {
       const cfg = trackConfigsRef.current[i];
-      gain.gain.value = (cfg?.enabled ?? true) ? (cfg?.volume ?? 1) : 0;
+      return (cfg?.enabled ?? true) ? (cfg?.volume ?? 1) : 0;
+    });
+    const engine = new ChunkedAudioEngine(
+      ctx,
+      audioTrackPaths,
+      meta?.durationSecs ?? 0,
+      initialGains
+    );
+    engineRef.current = engine;
 
-      source.connect(gain);
-      gain.connect(ctx.destination);
-
-      audioElsRef.current.push(audioEl);
-      sourceNodesRef.current.push(source);
-      gainNodesRef.current.push(gain);
-    }
-
-    // If video is already playing when tracks become ready, sync and start audio
+    // If video is already playing when tracks become ready, start in sync
     const v = videoRef.current;
     if (v && !v.paused) {
-      ctx.resume();
-      audioElsRef.current.forEach(a => {
-        a.currentTime = v.currentTime;
-        a.play().catch(() => {});
-      });
+      engine.play(v.currentTime);
     }
 
     setAudioReady(true);
 
     return teardownAudio;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [audioTrackPaths, mediaPort]);
+  }, [audioTrackPaths]);
 
-  // ── Sync audio elements when video plays / pauses / seeks ────────────────────
+  // ── Sync the engine when video plays / pauses / seeks ─────────────────────────
   function onVideoPlay() {
     const v = videoRef.current;
-    if (!v || audioElsRef.current.length === 0) return;
-    audioCtxRef.current?.resume();
-    audioElsRef.current.forEach(a => {
-      a.currentTime = v.currentTime;
-      a.play().catch(() => {});
-    });
+    if (v) engineRef.current?.play(v.currentTime);
   }
 
-  // Pausing the <audio> elements only stops their *input* to the Web Audio
-  // graph — WebKitGTK's sink keeps playing the ~1-2s of samples already queued
-  // behind the gain nodes. Suspending the context halts output immediately;
-  // onVideoPlay resumes it.
+  // pause() suspends the AudioContext, not just the sources — suspending halts
+  // samples already queued in the OS sink instead of letting them play out.
   function onVideoPause() {
-    audioElsRef.current.forEach(a => a.pause());
-    audioCtxRef.current?.suspend().catch(() => {});
+    engineRef.current?.pause();
   }
 
   // Periodic drift/stall correction, driven by the video's timeupdate (a few
-  // times a second). Audio elements run on their own pipelines and can stall
-  // on a buffer underrun without ever resuming, or drift off the video clock;
-  // this nudges them back. Deliberately no setState — playback must not
+  // times a second): re-anchors the engine if it drifts off the video clock and
+  // tops up the chunk schedule. Deliberately no setState — playback must not
   // re-render the app.
   function onVideoTimeUpdate() {
     const v = videoRef.current;
-    if (!v) return;
-    for (const a of audioElsRef.current) {
-      const cmd = audioSyncCommand(v.currentTime, v.paused, a.currentTime, a.paused);
-      if (cmd.seek) a.currentTime = v.currentTime;
-      if (cmd.play) {
-        audioCtxRef.current?.resume();
-        a.play().catch(() => {});
-      }
-    }
+    if (v) engineRef.current?.tick(v.currentTime, v.paused);
   }
 
   // While the video rebuffers, park the audio so it doesn't run ahead;
   // onPlaying (→ onVideoPlay) resyncs and resumes it.
   function onVideoWaiting() {
-    audioElsRef.current.forEach(a => a.pause());
-    audioCtxRef.current?.suspend().catch(() => {});
+    engineRef.current?.pause();
   }
 
   // The native <video controls> bar exposes its own volume/mute button that
@@ -325,8 +286,22 @@ function App() {
 
   function onVideoSeeked() {
     const v = videoRef.current;
-    if (!v) return;
-    audioElsRef.current.forEach(a => { a.currentTime = v.currentTime; });
+    if (v) engineRef.current?.seek(v.currentTime);
+  }
+
+  // The video-only swap remounts the <video> (its key is the source path);
+  // land the fresh element where playback left off. When the engine kept
+  // playing through the swap, its clock — not the pre-swap snapshot — is where
+  // the audio is now, so resuming there keeps the transition seamless.
+  function onVideoLoadedMetadata() {
+    const r = restoreAfterSwapRef.current;
+    const v = videoRef.current;
+    if (!r || !v) return;
+    restoreAfterSwapRef.current = null;
+    v.currentTime = r.paused ? r.time : engineRef.current?.currentMediaTime() ?? r.time;
+    // If resuming is refused, park the engine too — otherwise audio would keep
+    // running against a frozen video with no timeupdate ticks to correct it.
+    if (!r.paused) v.play().catch(() => engineRef.current?.pause());
   }
 
   // Native-first, proxy-fallback (spec §4.4): if the WebView can't decode the
@@ -334,6 +309,19 @@ function App() {
   // If the proxy itself fails, surface the error instead of looping.
   function handleVideoError(e: React.SyntheticEvent<HTMLVideoElement>) {
     const err = e.currentTarget.error;
+    // A failing video-only remux is not a codec problem — the same streams just
+    // played from the previous source. Drop back to it and don't retry.
+    if (videoOnlyPath) {
+      videoOnlyFailedRef.current = true;
+      // If the remux died before loadedmetadata, the pre-swap snapshot is still
+      // pending — keep it rather than the dead element's zeroed clock.
+      if (!restoreAfterSwapRef.current) {
+        const v = videoRef.current;
+        restoreAfterSwapRef.current = v ? { time: v.currentTime, paused: v.paused } : null;
+      }
+      setVideoOnlyPath(null);
+      return;
+    }
     if (path && shouldTryProxy(proxyPath)) {
       setVideoError(null);
       setProxyStatus("This format won't play natively — building a compatible preview…");
@@ -353,18 +341,41 @@ function App() {
     );
   }
 
-  // ── Per-track config update: applies immediately to the gain node ─────────────
+  // ── Per-track config update: applies immediately to the engine's gain node ────
   function updateTrackConfig(i: number, patch: Partial<TrackConfig>) {
     setTrackConfigs(prev => {
       const next = prev.map((c, idx) => idx === i ? { ...c, ...patch } : c);
       const cfg = next[i];
-      const gain = gainNodesRef.current[i];
-      if (gain) {
-        gain.gain.value = cfg.enabled ? cfg.volume : 0;
-      }
+      engineRef.current?.setTrackGain(i, cfg.enabled ? cfg.volume : 0);
       return next;
     });
   }
+
+  // ── Video-only source swap ─────────────────────────────────────────────────────
+  // Once the engine owns all audio, remux the active preview source into a
+  // video-only copy and switch the <video> to it. A file with no audio track
+  // never gets an audio pipeline in the WebView, so the element stops
+  // registering its own (muted) stream with the OS mixer — leaving the shared
+  // AudioContext as the app's single stream on Linux and Windows alike.
+  useEffect(() => {
+    if (!audioReady || !path || videoOnlyFailedRef.current) return;
+    const source = proxyPath ?? path;
+    let cancelled = false;
+    prepareVideoOnly(source)
+      .then(vo => {
+        if (cancelled || videoOnlyFailedRef.current) return;
+        const v = videoRef.current;
+        restoreAfterSwapRef.current = v ? { time: v.currentTime, paused: v.paused } : null;
+        setVideoOnlyPath(vo);
+      })
+      .catch(err => {
+        // Not fatal: playback continues from the muted original.
+        console.error("Video-only remux failed:", err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [audioReady, path, proxyPath]);
 
   // ── Keyboard shortcuts ────────────────────────────────────────────────────────
   function markIn() {
@@ -532,6 +543,9 @@ function App() {
     setAudioTrackPaths([]);
     setTrackConfigs([]);
     setAudioPreparingMsg(null);
+    setVideoOnlyPath(null);
+    videoOnlyFailedRef.current = false;
+    restoreAfterSwapRef.current = null;
     teardownAudio();
 
     try {
@@ -972,15 +986,17 @@ function App() {
 
         {path && (
           <>
-            {/* Video: original first, proxy fallback (§4.4); muted once Web Audio takes over */}
+            {/* Video: original first, proxy fallback (§4.4), then the video-only
+                remux once the audio engine has taken over; muted in the interim */}
             <video
               ref={videoRef}
-              key={previewPath(path, proxyPath)}
-              src={mediaPort ? `http://127.0.0.1:${mediaPort}/file?path=${encodeURIComponent(previewPath(path, proxyPath))}` : undefined}
+              key={previewPath(path, proxyPath, videoOnlyPath)}
+              src={mediaPort ? `http://127.0.0.1:${mediaPort}/file?path=${encodeURIComponent(previewPath(path, proxyPath, videoOnlyPath))}` : undefined}
               controls
               muted={audioReady}
               className="video-player"
               style={{ maxHeight: `${videoHeight.size}vh` }}
+              onLoadedMetadata={onVideoLoadedMetadata}
               onTimeUpdate={onVideoTimeUpdate}
               onPlay={onVideoPlay}
               onPlaying={onVideoPlay}

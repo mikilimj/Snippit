@@ -232,6 +232,76 @@ async fn prepare_audio_tracks(
     Ok(results)
 }
 
+/// Decode one time window of an extracted preview audio track to 16-bit PCM WAV
+/// bytes (raw ArrayBuffer on the JS side). The frontend schedules these chunks
+/// on its single shared AudioContext instead of per-track <audio> elements —
+/// each element registers its own audio stream with the OS mixer (WebKitGTK
+/// keeps a muted system sink per element even when captured into Web Audio),
+/// so chunked decode is what keeps the app down to one stream.
+#[tauri::command]
+async fn audio_chunk(
+    app: tauri::AppHandle,
+    path: String,
+    start: f64,
+    dur: f64,
+) -> Result<tauri::ipc::Response, String> {
+    if !(start.is_finite() && dur.is_finite() && dur > 0.0) {
+        return Err(format!("invalid chunk window: start={start} dur={dur}"));
+    }
+    let result = app
+        .shell()
+        .sidecar("ffmpeg")
+        .map_err(|e| e.to_string())?
+        .args(media::build_audio_chunk_args(&path, start.max(0.0), dur))
+        .output()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !result.status.success() {
+        return Err(String::from_utf8_lossy(&result.stderr).to_string());
+    }
+    let mut bytes = result.stdout;
+    if !media::patch_wav_sizes(&mut bytes) {
+        return Err("ffmpeg produced no decodable audio for this chunk".to_string());
+    }
+    Ok(tauri::ipc::Response::new(bytes))
+}
+
+/// Remux the current preview source into a cached video-only copy (stream copy,
+/// no re-encode). Once Web Audio owns playback the <video> element is switched
+/// to this file: with no audio track present, the WebView never builds an audio
+/// pipeline for it, so the element stops registering a (muted) stream with the
+/// OS mixer and the app is left with exactly one — the AudioContext's.
+#[tauri::command]
+async fn prepare_video_only(app: tauri::AppHandle, path: String) -> Result<String, String> {
+    let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    // Cached beside the proxies when the library exists; temp dir otherwise.
+    let cache = match setup::read_pointer_file(&config_dir) {
+        Some(root) => std::path::Path::new(&root).join("Cache").join("proxies"),
+        None => std::env::temp_dir(),
+    };
+    let _ = std::fs::create_dir_all(&cache);
+    let mtime = file_mtime_unix(std::path::Path::new(&path));
+    let out = media::video_only_path(&cache, &path, mtime);
+    let out_str = out.to_string_lossy().to_string();
+    if out.exists() {
+        return Ok(out_str); // reuse the cached remux
+    }
+    let result = app
+        .shell()
+        .sidecar("ffmpeg")
+        .map_err(|e| e.to_string())?
+        .args(media::build_video_only_args(&path, &out_str))
+        .output()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !result.status.success() {
+        // Never leave a truncated file behind — it would be "cached" forever.
+        let _ = std::fs::remove_file(&out);
+        return Err(String::from_utf8_lossy(&result.stderr).to_string());
+    }
+    Ok(out_str)
+}
+
 /// The single in-flight export job: the spawned ffmpeg child (so it can be
 /// killed) and a flag distinguishing a user cancel from a genuine failure. Only
 /// one export runs at a time.
@@ -1230,6 +1300,8 @@ pub fn run() {
             cancel_export,
             get_media_port,
             prepare_audio_tracks,
+            audio_chunk,
+            prepare_video_only,
             get_app_root,
             check_root_dir_status,
             check_path_writable,

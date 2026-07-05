@@ -1,12 +1,20 @@
-//! Preview-source rules for the native-first / proxy-fallback strategy (spec §4.4).
+//! Preview-source rules for the native-first / proxy-fallback strategy (spec §4.4),
+//! extended with the video-only remux that keeps the <video> element off the OS
+//! audio mixer once the chunked engine (audioEngine.ts) owns playback.
 
 /**
- * The file the `<video>` element should load: the generated proxy once we have
- * one, otherwise the untouched original. Export never uses this — it always
- * reads the original path.
+ * The file the `<video>` element should load, in order of preference: the
+ * video-only remux of the active source once it exists (its pipeline carries no
+ * audio, so the element registers no OS audio stream), else the generated proxy,
+ * else the untouched original. Export never uses this — it always reads the
+ * original path.
  */
-export function previewPath(originalPath: string, proxyPath: string | null): string {
-  return proxyPath ?? originalPath;
+export function previewPath(
+  originalPath: string,
+  proxyPath: string | null,
+  videoOnlyPath: string | null = null
+): string {
+  return videoOnlyPath ?? proxyPath ?? originalPath;
 }
 
 /**
@@ -16,30 +24,4 @@ export function previewPath(originalPath: string, proxyPath: string | null): str
  */
 export function shouldTryProxy(proxyPath: string | null): boolean {
   return proxyPath === null;
-}
-
-export interface AudioSyncCommand {
-  /** Snap the audio element's currentTime to the video clock. */
-  seek: boolean;
-  /** Resume a track that stalled (paused itself) while the video kept playing. */
-  play: boolean;
-}
-
-/**
- * Periodic keep-in-sync check for one preview audio track against the video
- * clock. Audio elements run on their own pipelines and can stall on a buffer
- * underrun without ever resuming, or drift relative to the video; both must be
- * corrected, but tracks within the tolerance are left untouched — seeking an
- * in-sync track causes an audible stutter.
- */
-export function audioSyncCommand(
-  videoTime: number,
-  videoPaused: boolean,
-  audioTime: number,
-  audioPaused: boolean,
-  driftTolerance = 0.35
-): AudioSyncCommand {
-  if (videoPaused) return { seek: false, play: false };
-  if (audioPaused) return { seek: true, play: true };
-  return { seek: Math.abs(videoTime - audioTime) > driftTolerance, play: false };
 }
