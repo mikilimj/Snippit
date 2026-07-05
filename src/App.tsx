@@ -449,7 +449,16 @@ function App() {
     }
     setSegments(prev => [
       ...prev,
-      { id: Date.now(), path, displayName: basename(path), inSecs: inPoint, outSecs: outPoint },
+      {
+        id: Date.now(),
+        path,
+        displayName: basename(path),
+        inSecs: inPoint,
+        outSecs: outPoint,
+        // Snapshot the audio mix as previewed right now — the export must include
+        // every enabled track, not just the file's first one.
+        tracks: trackConfigs.map(c => ({ ...c })),
+      },
     ]);
   }
 
@@ -468,13 +477,24 @@ function App() {
 
   async function exportSequenceClick() {
     if (segments.length === 0) return;
+    // The same Size dropdown drives sequences: "Original quality" = CRF encode,
+    // a size target = bitrate encode of the whole stitched sequence.
+    if (!isCustomSelectionValid(sizeSelection, customMb)) {
+      setStatus("Enter a valid custom size in MB first.");
+      return;
+    }
+    const targetMb = resolveTargetMb(sizeSelection, customMb);
     const dest = await save({ defaultPath: "sequence.mp4" });
     if (!dest) return;
     setExporting(true);
-    setProgress({ fraction: 0, phase: "Stitching" });
-    setStatus(`Stitching ${segments.length} clip${segments.length > 1 ? "s" : ""}…`);
+    setProgress({ fraction: 0, phase: targetMb === null ? "Stitching" : "Analyzing" });
+    setStatus(
+      targetMb === null
+        ? `Stitching ${segments.length} clip${segments.length > 1 ? "s" : ""}…`
+        : `Stitching ${segments.length} clip${segments.length > 1 ? "s" : ""} into ${targetMb} MB…`
+    );
     try {
-      const out = await exportSequence(toBackendSegments(segments), music, dest);
+      const out = await exportSequence(toBackendSegments(segments), music, dest, targetMb);
       setStatus(`Exported: ${out}`);
     } catch (e) {
       const msg = String(e);
@@ -1211,7 +1231,12 @@ function App() {
               )}
 
               {segments.length > 0 && (
-                <button className="btn-export" onClick={exportSequenceClick} disabled={exporting}>
+                <button
+                  className="btn-export"
+                  onClick={exportSequenceClick}
+                  disabled={exporting}
+                  title="Uses the Size selector above: Original quality, or compress the whole sequence to the chosen size"
+                >
                   {exporting ? "Exporting…" : `Export sequence (${segments.length})`}
                 </button>
               )}

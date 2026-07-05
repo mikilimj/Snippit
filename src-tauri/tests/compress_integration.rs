@@ -1,6 +1,8 @@
 use std::process::Command;
 
-use clipsnip_lib::export::{build_compress_pass_args, compute_target_bitrates, TrackConfig};
+use clipsnip_lib::export::{
+    build_compress_pass_args, compute_target_bitrates, ExportDevice, TrackConfig,
+};
 
 #[test]
 fn two_pass_compress_lands_at_or_under_the_target_size() {
@@ -33,6 +35,7 @@ fn two_pass_compress_lands_at_or_under_the_target_size() {
     for pass in [1u8, 2u8] {
         let args = build_compress_pass_args(
             src_s, 1.0, 9.0, dst_s, &tracks, video_kbps, audio_kbps, pass, passlog_s,
+            &ExportDevice::Cpu,
         );
         let status = Command::new("ffmpeg").args(&args).status().expect("ffmpeg pass runs");
         assert!(status.success(), "pass {pass} failed");

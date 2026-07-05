@@ -1,7 +1,7 @@
 //! Pure helpers for the light timeline: an ordered list of trimmed segments
 //! (spec §4.3). All operations are immutable so React state updates stay simple.
 
-import type { Segment } from "./api";
+import type { Segment, TrackConfig } from "./api";
 
 /** One clip in the sequence, as tracked by the UI. */
 export interface SequenceSegment {
@@ -10,6 +10,12 @@ export interface SequenceSegment {
   displayName: string;
   inSecs: number;
   outSecs: number;
+  /**
+   * Audio track configs snapshotted when the clip was added — the export must mix
+   * exactly what the preview played at that moment, not whatever the sliders say
+   * later (or only the file's first track, as the pre-fix export did).
+   */
+  tracks: TrackConfig[];
 }
 
 /** Move the segment at `index` by `dir` (-1 earlier, +1 later). Edges are no-ops. */
@@ -39,5 +45,10 @@ export function sequenceDuration(list: SequenceSegment[]): number {
 
 /** Map UI segments to the Rust `Segment` shape the export command expects. */
 export function toBackendSegments(list: SequenceSegment[]): Segment[] {
-  return list.map(s => ({ input: s.path, inSecs: s.inSecs, outSecs: s.outSecs }));
+  return list.map(s => ({
+    input: s.path,
+    inSecs: s.inSecs,
+    outSecs: s.outSecs,
+    tracks: s.tracks.map(t => ({ ...t })),
+  }));
 }

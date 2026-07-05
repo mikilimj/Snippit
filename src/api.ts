@@ -180,6 +180,8 @@ export interface Segment {
   input: string;
   inSecs: number;
   outSecs: number;
+  /** Per-track audio config snapshotted when the clip was added to the sequence. */
+  tracks: TrackConfig[];
 }
 
 /** A music bed mixed over a sequence. Mirrors Rust `export::MusicOverlay`. */
@@ -189,13 +191,39 @@ export interface MusicOverlay {
   loopToLength: boolean;
 }
 
-/** Stitch trimmed segments (+ optional music) into one H.264/AAC MP4 (spec §4.3). */
+/**
+ * Stitch trimmed segments (+ optional music) into one H.264/AAC MP4 (spec §4.3).
+ * `targetMb` compresses the whole sequence to a file size, like single-clip export.
+ */
 export function exportSequence(
   segments: Segment[],
   music: MusicOverlay | null,
   output: string,
+  targetMb: number | null,
 ): Promise<string> {
-  return invoke<string>("export_sequence", { segments, music, output });
+  return invoke<string>("export_sequence", { segments, music, output, targetMb });
+}
+
+/** One export encode device (CPU or a probed hardware encoder). */
+export interface ExportDeviceInfo {
+  id: string;
+  label: string;
+  available: boolean;
+}
+
+/** CPU plus every hardware encoder candidate on this OS, with probed availability. */
+export function listExportDevices(): Promise<ExportDeviceInfo[]> {
+  return invoke<ExportDeviceInfo[]>("list_export_devices");
+}
+
+/** The device id currently used for export re-encodes ("cpu" when unset). */
+export function getExportDevice(): Promise<string> {
+  return invoke<string>("get_export_device");
+}
+
+/** Persist the export device choice. */
+export function setExportDevice(device: string): Promise<void> {
+  return invoke<void>("set_export_device", { device });
 }
 
 /** The watched-mode source folder, or null when nothing is relocatable (§4.7). */
