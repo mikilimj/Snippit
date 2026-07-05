@@ -31,14 +31,20 @@ files with HTTP range support at `/file?path=<absolute-path>`. The frontend's
 `<video>` element just points at that URL. This exists because custom URI protocols
 are unreliable for media in WebKitGTK; real HTTP works uniformly on Linux/Windows/macOS.
 
-**Multi-track audio preview bypasses the browser's native audio decode entirely.**
-Each audio stream in the source is extracted once (cached by a hash of the source
-path) to a temp `.m4a` via the `prepare_audio_tracks` command, then loaded into a
-per-track `<audio>` element routed through the Web Audio API
-(`createMediaElementSource` → per-track `GainNode` → `AudioContext.destination`),
-kept in sync with the video's `currentTime`. The native `<video>` is force-muted once
-this graph is live so it can't leak its own audio back in. Each track's mute
-checkbox / 0–200% volume slider drives its `GainNode` directly.
+**All preview audio flows through ONE shared AudioContext — the app must register
+exactly one audio stream with the OS mixer.** Media elements are never used for
+audio: on WebKitGTK every media element keeps its own (muted) system audio sink
+alive even when captured into Web Audio, so element-based playback showed one OS
+stream per track. Instead, each audio stream in the source is extracted once
+(cached by a hash of the source path) to a temp `.m4a` via `prepare_audio_tracks`,
+and `audioEngine.ts` pulls ~20s PCM windows from it through the `audio_chunk`
+command (ffmpeg → WAV bytes over IPC), decodes them with `decodeAudioData`, and
+schedules `AudioBufferSourceNode`s (per-track `GainNode` → destination) against
+the video clock. Each track's mute checkbox / 0–200% volume slider drives its
+`GainNode` directly. The `<video>` plays the original (with its own audio) for
+instant startup; once the engine takes over it is muted, and then swapped to a
+cached video-only remux (`prepare_video_only`, stream copy) so its pipeline stops
+registering an OS audio stream entirely.
 
 **Export mirrors what was actually heard in preview** (`export.rs`): a single enabled
 track at 100% volume takes the fast lossless path (`-c copy`, explicit stream maps,
@@ -50,7 +56,8 @@ into one output stream (video stream-copied, audio re-encoded to AAC).
 - `media_server.rs` — the local HTTP range-serving server for playback
 - `probe.rs` — shells out to `ffprobe` for duration/resolution/codec/audio-track info
 - `export.rs` — builds the `ffmpeg` export command (lossless copy vs. `amix` re-encode)
-- `media.rs` — proxy generation for unplayable clips (720p H.264 fallback) and thumbnails
+- `media.rs` — ffmpeg arg builders: proxies for unplayable clips (720p H.264 fallback),
+  thumbnails, preview-audio PCM chunks (incl. WAV pipe-size patching), video-only remux
 - `library.rs` — sqlite-backed clip library index (rusqlite)
 - `watcher.rs` — filesystem watcher for watch-mode source folders (`notify` crate)
 - `relocate.rs` — crash-safe move of a watched folder to a new disk (same-volume
@@ -64,9 +71,11 @@ into one output stream (video stream-copied, audio re-encoded to AAC).
 - `Timeline.tsx` — custom scrub timeline for setting in/out trim points (`I`/`O` keys)
 - `FirstRunWizard.tsx` / `SettingsModal.tsx` — onboarding and settings UI
 - `api.ts` — typed wrappers around Tauri `invoke` calls
+- `audioEngine.ts` — the chunked preview-audio engine (fetch/decode/schedule on the
+  shared AudioContext); its scheduling math lives in `audioChunks.ts`
 - `trim.ts`, `sequence.ts`, `exportOptions.ts`, `libraryView.ts`, `preview.ts`,
-  `wizardValidation.ts`, `resizable.ts` — pure logic modules, each with a
-  co-located `*.test.ts`
+  `audioChunks.ts`, `wizardValidation.ts`, `resizable.ts` — pure logic modules,
+  each with a co-located `*.test.ts`
 
 Styling is plain CSS (`App.css`, no Tailwind/CSS-in-JS); layout is CSS flexbox, no grid.
 

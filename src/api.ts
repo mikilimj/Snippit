@@ -131,6 +131,24 @@ export function prepareAudioTracks(path: string, streamIndices: number[]): Promi
   return invoke<string[]>("prepare_audio_tracks", { path, streamIndices });
 }
 
+/**
+ * Decode `dur` seconds of an extracted track starting at `start` to WAV bytes.
+ * Feeds the chunked preview-audio engine (single OS audio stream — see
+ * audioEngine.ts).
+ */
+export function audioChunk(path: string, start: number, dur: number): Promise<ArrayBuffer> {
+  return invoke<ArrayBuffer>("audio_chunk", { path, start, dur });
+}
+
+/**
+ * Remux the current preview source into a cached video-only copy. Loaded into
+ * the <video> once Web Audio owns playback so the element's pipeline stops
+ * registering its own (muted) audio stream with the OS mixer.
+ */
+export function prepareVideoOnly(path: string): Promise<string> {
+  return invoke<string>("prepare_video_only", { path });
+}
+
 /** Fast = stream-copy (near-instant); Compatible = H.264/AAC re-encode (universal). */
 export type ExportMode = "fast" | "compatible";
 
