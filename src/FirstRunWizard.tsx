@@ -1,7 +1,17 @@
 import { useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { checkRootDirStatus, checkPathWritable, completeSetup, type SetupResult } from "./api";
-import { canContinueFromRootStep, canFinishIngestionStep, type IngestionMode } from "./wizardValidation";
+import {
+  checkRootDirStatus,
+  checkPathWritable,
+  completeSetup,
+  storageScanDiff,
+  storageImportClips,
+  type SetupResult,
+  type SyncDiffResult,
+} from "./api";
+import { canContinueFromRootStep, canFinishIngestionStep, canFinishRestoreStep, type IngestionMode } from "./wizardValidation";
+import { displayNameFor, formatSize } from "./syncDiff";
+import { StorageConnectForm } from "./StorageSettings";
 import logo from "./assets/logo.png";
 import "./FirstRunWizard.css";
 
@@ -10,7 +20,7 @@ interface FirstRunWizardProps {
 }
 
 export function FirstRunWizard({ onComplete }: FirstRunWizardProps) {
-  const [step, setStep] = useState<0 | 1 | 2>(0);
+  const [step, setStep] = useState<0 | 1 | 2 | 3>(0);
   const [rootPath, setRootPath] = useState<string | null>(null);
   const [rootNonEmptyWarning, setRootNonEmptyWarning] = useState(false);
   const [rootWritable, setRootWritable] = useState(true);
@@ -18,6 +28,15 @@ export function FirstRunWizard({ onComplete }: FirstRunWizardProps) {
   const [sourceFolder, setSourceFolder] = useState<string | null>(null);
   const [finishing, setFinishing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Restore-mode step 3: setup already completed (as "empty"), now connect a
+  // remote and pull the clips down before entering the app.
+  const [setupResult, setSetupResult] = useState<SetupResult | null>(null);
+  const [connected, setConnected] = useState(false);
+  const [remoteDiff, setRemoteDiff] = useState<SyncDiffResult | null>(null);
+  const [diffError, setDiffError] = useState<string | null>(null);
+  const [restoreSelected, setRestoreSelected] = useState<Set<string>>(new Set());
+  const [importing, setImporting] = useState(false);
 
   async function pickRoot() {
     const selected = await open({ directory: true, multiple: false });
@@ -47,11 +66,55 @@ export function FirstRunWizard({ onComplete }: FirstRunWizardProps) {
     setFinishing(true);
     setError(null);
     try {
-      const result = await completeSetup(rootPath, mode, sourceFolder);
+      // Restore mode sets up an empty library first; the clips arrive from the
+      // remote in the extra step that follows.
+      const result = await completeSetup(rootPath, mode === "restore" ? "empty" : mode, sourceFolder);
+      if (mode === "restore") {
+        setSetupResult(result);
+        setFinishing(false);
+        setStep(3);
+        return;
+      }
       onComplete(result);
     } catch (e) {
       setError(String(e));
       setFinishing(false);
+    }
+  }
+
+  function scanRemote() {
+    setRemoteDiff(null);
+    setDiffError(null);
+    storageScanDiff()
+      .then(d => {
+        setRemoteDiff(d);
+        // Everything pre-checked: restoring wants the whole library by default.
+        setRestoreSelected(new Set(d.remoteOnly.map(f => f.path)));
+      })
+      .catch(e => setDiffError(String(e)));
+  }
+
+  function toggleRestoreRow(rel: string) {
+    setRestoreSelected(prev => {
+      const next = new Set(prev);
+      if (next.has(rel)) next.delete(rel);
+      else next.add(rel);
+      return next;
+    });
+  }
+
+  async function finishRestore() {
+    if (!setupResult) return;
+    setImporting(true);
+    setError(null);
+    try {
+      if (restoreSelected.size > 0) {
+        await storageImportClips(Array.from(restoreSelected));
+      }
+      onComplete(setupResult);
+    } catch (e) {
+      setError(String(e));
+      setImporting(false);
     }
   }
 
@@ -66,6 +129,7 @@ export function FirstRunWizard({ onComplete }: FirstRunWizardProps) {
           <div className={`wiz-dot${step === 0 ? " active" : ""}`} />
           <div className={`wiz-dot${step === 1 ? " active" : ""}`} />
           <div className={`wiz-dot${step === 2 ? " active" : ""}`} />
+          {mode === "restore" && <div className={`wiz-dot${step === 3 ? " active" : ""}`} />}
         </div>
 
         {step === 0 && (
@@ -158,6 +222,18 @@ export function FirstRunWizard({ onComplete }: FirstRunWizardProps) {
                   <div className="wiz-mode-desc">Remember a recorder's output folder for later.</div>
                 </div>
               </label>
+              <label className={`wiz-mode-option${mode === "restore" ? " selected" : ""}`}>
+                <input
+                  type="radio"
+                  name="ingestion-mode"
+                  checked={mode === "restore"}
+                  onChange={() => setMode("restore")}
+                />
+                <div>
+                  <div className="wiz-mode-title">Restore from server or cloud</div>
+                  <div className="wiz-mode-desc">Download a synced library from SFTP, Dropbox or Google Drive.</div>
+                </div>
+              </label>
             </div>
 
             {(mode === "import" || mode === "watch") && (
@@ -176,9 +252,82 @@ export function FirstRunWizard({ onComplete }: FirstRunWizardProps) {
                 disabled={!canFinishIngestionStep(mode, sourceFolder) || finishing}
                 onClick={finish}
               >
-                {finishing ? "Setting up…" : "Finish"}
+                {finishing ? "Setting up…" : mode === "restore" ? "Continue" : "Finish"}
               </button>
             </div>
+          </>
+        )}
+
+        {step === 3 && (
+          <>
+            <div className="wiz-title">Restore from server or cloud</div>
+            {!connected ? (
+              <>
+                <div className="wiz-desc">
+                  Connect the storage that holds your synced library.
+                </div>
+                <StorageConnectForm
+                  onConnected={() => {
+                    setConnected(true);
+                    scanRemote();
+                  }}
+                />
+              </>
+            ) : (
+              <>
+                <div className="wiz-desc">
+                  Pick the clips to download into your new library.
+                </div>
+                {diffError !== null ? (
+                  <>
+                    <div className="wiz-warning wiz-error">{diffError}</div>
+                    <div className="wiz-nav wiz-nav-single">
+                      <button className="wiz-next" onClick={scanRemote}>Retry</button>
+                    </div>
+                  </>
+                ) : remoteDiff === null ? (
+                  <div className="wiz-desc">Scanning the remote library…</div>
+                ) : remoteDiff.remoteOnly.length === 0 ? (
+                  <div className="wiz-warning">Nothing to restore — the remote library is empty.</div>
+                ) : (
+                  <ul className="wiz-restore-list">
+                    {remoteDiff.remoteOnly.map(f => (
+                      <li key={f.path}>
+                        <label className="wiz-restore-row">
+                          <input
+                            type="checkbox"
+                            checked={restoreSelected.has(f.path)}
+                            onChange={() => toggleRestoreRow(f.path)}
+                          />
+                          <span className="wiz-restore-name" title={f.path}>
+                            {displayNameFor(f.path, null)}
+                          </span>
+                          <span className="wiz-restore-size">{formatSize(f.size)}</span>
+                        </label>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </>
+            )}
+
+            {error && <div className="wiz-warning wiz-error">{error}</div>}
+
+            {connected && diffError === null && (
+              <div className="wiz-nav wiz-nav-single">
+                <button
+                  className="wiz-next"
+                  disabled={!canFinishRestoreStep(connected) || remoteDiff === null || importing}
+                  onClick={finishRestore}
+                >
+                  {importing
+                    ? "Importing…"
+                    : restoreSelected.size > 0
+                      ? `Import ${restoreSelected.size} clip${restoreSelected.size === 1 ? "" : "s"} & finish`
+                      : "Finish without importing"}
+                </button>
+              </div>
+            )}
           </>
         )}
       </div>

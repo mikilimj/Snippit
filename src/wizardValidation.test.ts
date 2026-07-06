@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canContinueFromRootStep, canFinishIngestionStep } from "./wizardValidation";
+import { canContinueFromRootStep, canFinishIngestionStep, canFinishRestoreStep } from "./wizardValidation";
 
 describe("canContinueFromRootStep", () => {
   it("is false with no root path chosen", () => {
@@ -25,5 +25,15 @@ describe("canFinishIngestionStep", () => {
   });
   it("is false for watch mode without a source folder", () => {
     expect(canFinishIngestionStep("watch", null)).toBe(false);
+  });
+  it("is true for restore mode with no source folder", () => {
+    expect(canFinishIngestionStep("restore", null)).toBe(true);
+  });
+});
+
+describe("canFinishRestoreStep", () => {
+  it("requires a connection before finishing", () => {
+    expect(canFinishRestoreStep(false)).toBe(false);
+    expect(canFinishRestoreStep(true)).toBe(true);
   });
 });
