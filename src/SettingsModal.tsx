@@ -14,6 +14,7 @@ import {
   type ExportDeviceInfo,
   type ExportProgress,
 } from "./api";
+import { StorageSection } from "./StorageSettings";
 
 function ProgressBar({ progress }: { progress: ExportProgress }) {
   return (
@@ -35,7 +36,13 @@ function ProgressBar({ progress }: { progress: ExportProgress }) {
  * Settings surface for folder relocation (spec §4.7). v1 exposes moving the
  * watched source folder to a new path/disk with a cancellable progress bar.
  */
-export function SettingsModal({ onClose }: { onClose: () => void }) {
+export function SettingsModal({
+  onClose,
+  onOpenDiff,
+}: {
+  onClose: () => void;
+  onOpenDiff?: () => void;
+}) {
   const [watched, setWatched] = useState<string | null | undefined>(undefined);
   const [moving, setMoving] = useState(false);
   const [progress, setProgress] = useState<ExportProgress | null>(null);
@@ -264,6 +271,8 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
             <div className={/fail/i.test(bundleMsg) ? "msg-error" : "msg-ok"}>{bundleMsg}</div>
           )}
         </div>
+
+        <StorageSection onOpenDiff={onOpenDiff} />
       </div>
     </div>
   );
