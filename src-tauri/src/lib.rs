@@ -16,9 +16,9 @@ use export::{
     Segment, SequenceTarget, TrackConfig,
 };
 use probe::{parse_ffprobe_json, ClipMeta};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::hash_map::DefaultHasher;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -1132,21 +1132,8 @@ async fn ingest_file_inner(
         None => return Ok(None),
     };
 
-    let cache = Path::new(&root).join("Cache").join("thumbnails");
-    let _ = std::fs::create_dir_all(&cache);
-    let thumb = media::thumbnail_path(&cache, &path_str, file_mtime_unix(path));
-    let thumb_str = thumb.to_string_lossy().to_string();
-    let thumb_opt = if thumb.exists() {
-        Some(thumb_str)
-    } else if generate_thumbnail(app, &path_str, &thumb_str, thumb_timestamp(meta.duration_secs))
-        .await
-        .is_ok()
-        && thumb.exists()
-    {
-        Some(thumb_str)
-    } else {
-        None
-    };
+    let thumb_opt =
+        ensure_thumbnail(app, Path::new(&root), &path_str, meta.duration_secs).await;
 
     let conn = library::open_db(&Path::new(&root).join("library.db"))?;
     let row = library::upsert_clip(&conn, &path_str, &meta, thumb_opt.as_deref())?;
@@ -1166,6 +1153,9 @@ async fn ingest_and_emit(
     in_flight.lock().unwrap().remove(&path);
     if let Ok(Some(row)) = result {
         let _ = app.emit("clip-added", row);
+        // A fresh (or grown) clip may need uploading — plan it so new recordings
+        // sync within seconds. No-ops when sync is off (no remote provider set).
+        enqueue_sync_scan(&app);
     }
 }
 
@@ -1263,6 +1253,895 @@ fn rescan_library(app: tauri::AppHandle) {
     scan_folders_now(&app);
 }
 
+/// Ensures a clip's thumbnail exists in the library thumbnail cache, returning its
+/// path (or None if generation failed). Same flow used by ingest and by the sync
+/// upload worker.
+async fn ensure_thumbnail(
+    app: &tauri::AppHandle,
+    root: &Path,
+    path_str: &str,
+    duration_secs: f64,
+) -> Option<String> {
+    let cache = root.join("Cache").join("thumbnails");
+    let _ = std::fs::create_dir_all(&cache);
+    let thumb = media::thumbnail_path(&cache, path_str, file_mtime_unix(Path::new(path_str)));
+    let thumb_str = thumb.to_string_lossy().to_string();
+    if thumb.exists() {
+        return Some(thumb_str);
+    }
+    if generate_thumbnail(app, path_str, &thumb_str, thumb_timestamp(duration_secs))
+        .await
+        .is_ok()
+        && thumb.exists()
+    {
+        Some(thumb_str)
+    } else {
+        None
+    }
+}
+
+// ── Remote storage sync (spec 2026-07-06) ─────────────────────────────────────
+//
+// One rclone remote (`clipsnip`) backs the whole feature; every upload path is
+// derived, never persisted as a queue. Sync only ever *uploads* — it never
+// deletes or downloads on its own. A single worker drains the derived queue one
+// file at a time; a 300 s timer re-plans. See task-6 brief for the full design.
+
+/// Transient sync state exposed to the UI. `provider` / counts are recomputed from
+/// settings + DB on read; `state`/`message` live in the engine.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StorageStatus {
+    provider: Option<String>,
+    state: String, // "idle" | "syncing" | "error"
+    message: Option<String>,
+    synced_count: u32,
+    pending_count: u32,
+}
+
+struct StorageStatusInner {
+    state: String,
+    message: Option<String>,
+}
+
+impl Default for StorageStatusInner {
+    fn default() -> Self {
+        StorageStatusInner {
+            state: "idle".to_string(),
+            message: None,
+        }
+    }
+}
+
+/// Managed sync state. The queue is *derived* (rebuilt by `enqueue_sync_scan`),
+/// never persisted; `worker_running` guarantees a single in-flight uploader.
+#[derive(Default)]
+struct SyncEngine {
+    queue: Mutex<VecDeque<PathBuf>>,
+    worker_running: AtomicBool,
+    status: Mutex<StorageStatusInner>,
+    /// Per-file consecutive upload failures; a file is dropped after 5 until the
+    /// next scan re-plans it.
+    retries: Mutex<HashMap<PathBuf, u32>>,
+}
+
+/// The sync settings surfaced to the UI.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SyncSettings {
+    upload_size_percent: Option<u8>,
+    local_size_percent: Option<u8>,
+    tray_enabled: bool,
+}
+
+/// One clip entry in the remote `library-index.json` (the portable, JSON-per-spec
+/// mirror of the library metadata).
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct IndexClip {
+    rel_path: String,
+    display_name: String,
+    favorite: bool,
+    folders: Vec<String>,
+    added_at: i64,
+}
+
+#[derive(Serialize, Deserialize)]
+struct LibraryIndex {
+    clips: Vec<IndexClip>,
+}
+
+/// Runs an rclone sidecar invocation, returning stdout on success and mapping a
+/// non-zero exit to `Err(stderr)`. The single choke-point every remote op flows
+/// through (Task 11 relies on it).
+async fn run_rclone(app: &tauri::AppHandle, args: Vec<String>) -> Result<String, String> {
+    let output = app
+        .shell()
+        .sidecar("rclone")
+        .map_err(|e| e.to_string())?
+        .args(args)
+        .output()
+        .await
+        .map_err(|e| e.to_string())?;
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+    }
+}
+
+/// Runs a plain (no-progress) ffmpeg invocation for the sync re-encode paths.
+async fn run_ffmpeg_plain(app: &tauri::AppHandle, args: Vec<String>) -> Result<(), String> {
+    let result = app
+        .shell()
+        .sidecar("ffmpeg")
+        .map_err(|e| e.to_string())?
+        .args(args)
+        .output()
+        .await
+        .map_err(|e| e.to_string())?;
+    if result.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&result.stderr).to_string())
+    }
+}
+
+/// Path of ClipSnip's private rclone config (never the user's own rclone setup).
+fn rclone_config_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    let _ = std::fs::create_dir_all(&config_dir);
+    Ok(remote::config_path(&config_dir))
+}
+
+/// The configured library root, or an error if setup hasn't run.
+fn resolve_root(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    let root =
+        setup::read_pointer_file(&config_dir).ok_or_else(|| "Library is not set up yet".to_string())?;
+    Ok(PathBuf::from(root))
+}
+
+/// Requires an active remote connection, returning `(root, base_path)`. Errors when
+/// no provider is configured — every remote-facing command gates on this.
+fn require_connection(app: &tauri::AppHandle) -> Result<(PathBuf, Option<String>), String> {
+    let root = resolve_root(app)?;
+    let settings = setup::read_settings(&root).ok_or_else(|| "No settings found.".to_string())?;
+    if settings.remote_provider.is_none() {
+        return Err("No remote storage is connected.".to_string());
+    }
+    Ok((root, settings.remote_base_path))
+}
+
+/// The remote path of the base directory itself (parent of `ClipSnip/`), used to
+/// probe reachability with `lsd` before the ClipSnip tree is created.
+fn remote_base_target(base: Option<&str>) -> String {
+    let b = base.unwrap_or("").trim_matches('/');
+    if b.is_empty() {
+        format!("{}:", remote::REMOTE_NAME)
+    } else {
+        format!("{}:{}", remote::REMOTE_NAME, b)
+    }
+}
+
+/// Joins a `/`-separated remote-relative name onto a local base, one path
+/// component at a time (so it's a real nested path on every OS).
+fn join_rel(base: &Path, rel: &str) -> PathBuf {
+    let mut out = base.to_path_buf();
+    for part in rel.split('/') {
+        out.push(part);
+    }
+    out
+}
+
+/// The thumbnail stem for a clip's rel-name: its filename without extension.
+/// Used identically on upload, download, and delete so the three agree.
+fn thumb_stem(rel_name: &str) -> String {
+    let file = rel_name.rsplit('/').next().unwrap_or(rel_name);
+    match file.rsplit_once('.') {
+        Some((stem, _)) => stem.to_string(),
+        None => file.to_string(),
+    }
+}
+
+/// Every video under `clips_dir`, paired with its size and mtime.
+fn scan_local_files(clips_dir: &Path) -> Vec<(PathBuf, u64, i64)> {
+    watcher::scan_video_files(clips_dir)
+        .into_iter()
+        .map(|p| {
+            let size = std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
+            let mtime = file_mtime_unix(&p);
+            (p, size, mtime)
+        })
+        .collect()
+}
+
+/// Builds the current status snapshot (provider + counts recomputed from disk).
+fn current_status(app: &tauri::AppHandle) -> StorageStatus {
+    let engine = app.state::<SyncEngine>();
+    let (state, message) = {
+        let inner = engine.status.lock().unwrap();
+        (inner.state.clone(), inner.message.clone())
+    };
+    let pending_count = engine.queue.lock().unwrap().len() as u32;
+    let provider = resolve_root(app)
+        .ok()
+        .and_then(|r| setup::read_settings(&r))
+        .and_then(|s| s.remote_provider);
+    let synced_count = open_library(app)
+        .ok()
+        .and_then(|c| library::sync_state_list(&c).ok())
+        .map(|v| v.len() as u32)
+        .unwrap_or(0);
+    StorageStatus {
+        provider,
+        state,
+        message,
+        synced_count,
+        pending_count,
+    }
+}
+
+/// Emits the current status snapshot on the `sync-status` channel.
+fn emit_status(app: &tauri::AppHandle) {
+    let status = current_status(app);
+    let _ = app.emit("sync-status", status);
+}
+
+/// Updates the engine's transient state/message and emits `sync-status`.
+fn set_status(app: &tauri::AppHandle, state: &str, message: Option<String>) {
+    {
+        let engine = app.state::<SyncEngine>();
+        let mut inner = engine.status.lock().unwrap();
+        inner.state = state.to_string();
+        inner.message = message;
+    }
+    emit_status(app);
+}
+
+/// Serializes the library metadata to `<root>/Cache/library-index.json` (the
+/// portable JSON mirror uploaded alongside the clips) and returns its path.
+fn write_index_json(conn: &rusqlite::Connection, root: &Path) -> Result<String, String> {
+    let clips_root = root.join("Clips");
+    let clips_root_str = clips_root.to_string_lossy().to_string();
+
+    // Clip → folder-name memberships, gathered once.
+    let mut folder_map: HashMap<i64, Vec<String>> = HashMap::new();
+    for f in library::list_folders(conn)? {
+        for c in library::list_clips_in_folder(conn, f.id)? {
+            folder_map.entry(c.id).or_default().push(f.name.clone());
+        }
+    }
+
+    let mut clips = Vec::new();
+    for c in library::list_clips(conn)? {
+        clips.push(IndexClip {
+            rel_path: bundle::relativize_path(&c.path, &clips_root_str),
+            display_name: c.display_name,
+            favorite: c.favorite,
+            folders: folder_map.remove(&c.id).unwrap_or_default(),
+            added_at: c.added_at,
+        });
+    }
+
+    let json = serde_json::to_string_pretty(&LibraryIndex { clips }).map_err(|e| e.to_string())?;
+    let cache = root.join("Cache");
+    std::fs::create_dir_all(&cache).map_err(|e| e.to_string())?;
+    let path = cache.join("library-index.json");
+    std::fs::write(&path, json).map_err(|e| e.to_string())?;
+    Ok(path.to_string_lossy().to_string())
+}
+
+/// Rewrites and uploads the remote `library-index.json`.
+async fn refresh_remote_index(
+    app: &tauri::AppHandle,
+    root: &Path,
+    base: Option<&str>,
+) -> Result<(), String> {
+    let json_path = {
+        let conn = open_library(app)?;
+        write_index_json(&conn, root)?
+    };
+    let cfg = rclone_config_path(app)?;
+    let remote = remote::remote_dir(base, "library-index.json");
+    run_rclone(app, remote::copyto_args(&cfg, &json_path, &remote)).await?;
+    Ok(())
+}
+
+/// Best-effort: downloads the remote `library-index.json` and applies its
+/// `displayName`/`favorite`/`folders` to the just-imported clips (matched by
+/// relPath). Missing folders are created. Never fails the import.
+async fn apply_remote_index(
+    app: &tauri::AppHandle,
+    root: &Path,
+    base: Option<&str>,
+    imported: &[String],
+) {
+    let Ok(cfg) = rclone_config_path(app) else {
+        return;
+    };
+    let cache = root.join("Cache");
+    let _ = std::fs::create_dir_all(&cache);
+    let local_json = cache.join("remote-library-index.json");
+    let local_str = local_json.to_string_lossy().to_string();
+    let remote = remote::remote_dir(base, "library-index.json");
+    if run_rclone(app, remote::download_args(&cfg, &remote, &local_str))
+        .await
+        .is_err()
+    {
+        return; // no index on the remote yet — fine
+    }
+    let Ok(content) = std::fs::read_to_string(&local_json) else {
+        return;
+    };
+    let Ok(index) = serde_json::from_str::<LibraryIndex>(&content) else {
+        return;
+    };
+    let Ok(conn) = open_library(app) else {
+        return;
+    };
+    let clips_root = root.join("Clips");
+    let wanted: HashSet<&str> = imported.iter().map(|s| s.as_str()).collect();
+    for entry in index.clips {
+        if !wanted.contains(entry.rel_path.as_str()) {
+            continue;
+        }
+        let abs = join_rel(&clips_root, &entry.rel_path)
+            .to_string_lossy()
+            .to_string();
+        let Ok(Some(id)) = library::clip_id_by_path(&conn, &abs) else {
+            continue;
+        };
+        let _ = library::rename_clip(&conn, id, &entry.display_name);
+        let _ = library::set_favorite(&conn, id, entry.favorite);
+        for fname in &entry.folders {
+            let fid = match library::folder_id_by_name(&conn, fname) {
+                Ok(Some(fid)) => fid,
+                _ => match library::create_folder(&conn, fname) {
+                    Ok(f) => f.id,
+                    Err(_) => continue,
+                },
+            };
+            let _ = library::add_clip_to_folder(&conn, id, fid);
+        }
+    }
+}
+
+/// Re-plans the derived upload queue: scans `Clips/`, compares against
+/// `sync_state`, and enqueues novel/changed files (skipping ones already queued).
+/// No-op when no remote provider is configured. Starts the worker afterwards.
+fn enqueue_sync_scan(app: &tauri::AppHandle) {
+    let Ok(root) = resolve_root(app) else {
+        return;
+    };
+    let Some(settings) = setup::read_settings(&root) else {
+        return;
+    };
+    if settings.remote_provider.is_none() {
+        return;
+    }
+    let clips_dir = root.join("Clips");
+    let local: Vec<(String, u64, i64)> = scan_local_files(&clips_dir)
+        .into_iter()
+        .map(|(p, s, m)| (p.to_string_lossy().to_string(), s, m))
+        .collect();
+    let state = match open_library(app).and_then(|c| library::sync_state_list(&c)) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    let planned = sync::plan_uploads(&local, &state);
+    {
+        let engine = app.state::<SyncEngine>();
+        let mut queue = engine.queue.lock().unwrap();
+        let already: HashSet<PathBuf> = queue.iter().cloned().collect();
+        for p in planned {
+            let pb = PathBuf::from(p);
+            if !already.contains(&pb) {
+                queue.push_back(pb);
+            }
+        }
+    }
+    emit_status(app);
+    start_sync_worker(app);
+}
+
+/// Starts the single upload worker if one isn't already running.
+fn start_sync_worker(app: &tauri::AppHandle) {
+    if app
+        .state::<SyncEngine>()
+        .worker_running
+        .swap(true, Ordering::SeqCst)
+    {
+        return; // already draining
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        sync_worker(&app).await;
+        app.state::<SyncEngine>()
+            .worker_running
+            .store(false, Ordering::SeqCst);
+    });
+}
+
+/// Drains the derived queue one file at a time. On failure: retry counter++,
+/// 5-strike drop, 30 s backoff, error status. Emits `sync-status` on every
+/// transition.
+async fn sync_worker(app: &tauri::AppHandle) {
+    loop {
+        let path = {
+            let engine = app.state::<SyncEngine>();
+            let mut q = engine.queue.lock().unwrap();
+            q.pop_front()
+        };
+        let Some(path) = path else {
+            break;
+        };
+        set_status(app, "syncing", None);
+        match upload_one(app, &path).await {
+            Ok(note) => {
+                app.state::<SyncEngine>()
+                    .retries
+                    .lock()
+                    .unwrap()
+                    .remove(&path);
+                let empty = app.state::<SyncEngine>().queue.lock().unwrap().is_empty();
+                set_status(app, if empty { "idle" } else { "syncing" }, note);
+            }
+            Err(e) => {
+                let count = {
+                    let engine = app.state::<SyncEngine>();
+                    let mut retries = engine.retries.lock().unwrap();
+                    let c = retries.entry(path.clone()).or_insert(0);
+                    *c += 1;
+                    *c
+                };
+                if count >= 5 {
+                    app.state::<SyncEngine>()
+                        .retries
+                        .lock()
+                        .unwrap()
+                        .remove(&path);
+                    set_status(
+                        app,
+                        "error",
+                        Some(format!(
+                            "Gave up on {} after 5 attempts: {e}",
+                            path.display()
+                        )),
+                    );
+                } else {
+                    app.state::<SyncEngine>()
+                        .queue
+                        .lock()
+                        .unwrap()
+                        .push_back(path.clone());
+                    set_status(
+                        app,
+                        "error",
+                        Some(format!("Upload failed (attempt {count}/5): {e}")),
+                    );
+                    tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                }
+            }
+        }
+    }
+}
+
+/// Uploads one clip: stabilize → probe → thumbnail → (optional) size re-encode →
+/// upload video → upload thumbnail → refresh remote index → record `sync_state`
+/// (with the ORIGINAL size/mtime) → (optional) local shrink. `sync_state` is only
+/// written after the video upload's rclone exit 0. Returns an optional status note
+/// (e.g. a full-size fallback) on success.
+async fn upload_one(app: &tauri::AppHandle, path: &Path) -> Result<Option<String>, String> {
+    let root = resolve_root(app)?;
+    let settings = setup::read_settings(&root).ok_or_else(|| "No settings found.".to_string())?;
+    let base = settings.remote_base_path.as_deref();
+    let cfg = rclone_config_path(app)?;
+    let clips_dir = root.join("Clips");
+    let rel = sync::rel_name(&clips_dir, path).ok_or_else(|| "File is outside Clips/.".to_string())?;
+    let device = current_export_device(app);
+
+    // 1. Wait for the recorder to finish writing.
+    if !wait_for_stable_size(path).await {
+        return Err("File never stabilized.".to_string());
+    }
+    // 2. Probe (duration drives bitrate math + thumbnail).
+    let path_str = path.to_string_lossy().to_string();
+    let meta = probe_path(app, &path_str).await?;
+    // Original identity, captured before any local shrink, for sync_state.
+    let orig_size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    let orig_mtime = file_mtime_unix(path);
+
+    // 3. Thumbnail.
+    let thumb_path = ensure_thumbnail(app, &root, &path_str, meta.duration_secs).await;
+
+    // 4. Optional upload-size re-encode; fall back to full-size below the floor.
+    let mut note: Option<String> = None;
+    let upload_path: String = if let Some(percent) = settings.upload_size_percent {
+        let target_mb = media::percent_target_mb(orig_size, percent);
+        match compute_target_bitrates(target_mb, meta.duration_secs) {
+            Ok((video_kbps, audio_kbps)) => {
+                let out = join_rel(&root.join("Cache").join("upload-tmp"), &rel);
+                if let Some(parent) = out.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                let out_str = out.to_string_lossy().to_string();
+                run_ffmpeg_plain(
+                    app,
+                    media::build_size_reencode_args(
+                        &path_str, &out_str, video_kbps, audio_kbps, &device,
+                    ),
+                )
+                .await?;
+                out_str
+            }
+            Err(e) => {
+                note = Some(format!("Uploaded {rel} at full size ({e})"));
+                path_str.clone()
+            }
+        }
+    } else {
+        path_str.clone()
+    };
+
+    // 5. Upload the video. sync_state is only recorded after this succeeds.
+    let remote_video = remote::remote_dir(base, &format!("Clips/{rel}"));
+    let upload_result = run_rclone(app, remote::copyto_args(&cfg, &upload_path, &remote_video)).await;
+    if upload_path != path_str {
+        let _ = std::fs::remove_file(&upload_path); // clean the temp re-encode
+    }
+    upload_result?;
+
+    // 6. Upload the thumbnail (best-effort).
+    if let Some(tp) = &thumb_path {
+        let remote_thumb = remote::remote_dir(base, &format!("Thumbnails/{}.jpg", thumb_stem(&rel)));
+        if let Err(e) = run_rclone(app, remote::copyto_args(&cfg, tp, &remote_thumb)).await {
+            note = Some(append_note(note, format!("thumbnail upload failed: {e}")));
+        }
+    }
+
+    // 7. Refresh the remote index (best-effort; video is already up).
+    if let Err(e) = refresh_remote_index(app, &root, base).await {
+        note = Some(append_note(note, format!("index refresh failed: {e}")));
+    }
+
+    // 8. Record sync_state with the ORIGINAL size/mtime.
+    {
+        let conn = open_library(app)?;
+        library::sync_state_upsert(&conn, &path_str, orig_size, orig_mtime, &rel)?;
+    }
+
+    // 9. Optional local shrink (keeps the original untouched on any failure).
+    if let Some(percent) = settings.local_size_percent {
+        if let Err(e) =
+            shrink_local(app, &root, path, &path_str, &rel, orig_size, meta.duration_secs, percent, &device)
+                .await
+        {
+            note = Some(append_note(note, format!("local shrink skipped: {e}")));
+        }
+    }
+
+    Ok(note)
+}
+
+/// Joins a secondary note onto an optional primary one.
+fn append_note(existing: Option<String>, extra: String) -> String {
+    match existing {
+        Some(n) => format!("{n}; {extra}"),
+        None => extra,
+    }
+}
+
+/// Re-encodes the original in place to a size budget: encode to a temp file,
+/// probe-validate it (must decode with a positive duration), then atomically
+/// rename over the original (Cache and Clips share the library root volume) and
+/// refresh the clip row + `sync_state` with the new size/mtime so the shrunk file
+/// isn't re-uploaded. Any failure leaves the original intact.
+#[allow(clippy::too_many_arguments)]
+async fn shrink_local(
+    app: &tauri::AppHandle,
+    root: &Path,
+    path: &Path,
+    path_str: &str,
+    rel: &str,
+    orig_size: u64,
+    duration_secs: f64,
+    percent: u8,
+    device: &ExportDevice,
+) -> Result<(), String> {
+    let target_mb = media::percent_target_mb(orig_size, percent);
+    let (video_kbps, audio_kbps) = compute_target_bitrates(target_mb, duration_secs)?;
+
+    let cache = root.join("Cache");
+    let _ = std::fs::create_dir_all(&cache);
+    let tmp = cache.join("shrink-tmp.mp4");
+    let tmp_str = tmp.to_string_lossy().to_string();
+    let _ = std::fs::remove_file(&tmp);
+
+    let encode = run_ffmpeg_plain(
+        app,
+        media::build_size_reencode_args(path_str, &tmp_str, video_kbps, audio_kbps, device),
+    )
+    .await;
+    if let Err(e) = encode {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
+
+    // Never replace the original until the re-encode is proven valid.
+    let probed = match probe_path(app, &tmp_str).await {
+        Ok(m) if m.duration_secs > 0.0 => m,
+        Ok(_) => {
+            let _ = std::fs::remove_file(&tmp);
+            return Err("re-encode produced a zero-duration file".to_string());
+        }
+        Err(e) => {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(e);
+        }
+    };
+
+    if let Err(e) = std::fs::rename(&tmp, path) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e.to_string());
+    }
+
+    let new_size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    let new_mtime = file_mtime_unix(path);
+    let conn = open_library(app)?;
+    let _ = library::upsert_clip(&conn, path_str, &probed, None);
+    library::sync_state_upsert(&conn, path_str, new_size, new_mtime, rel)?;
+    Ok(())
+}
+
+/// Shared connect finalization: validate reachability, create the remote tree,
+/// clear `sync_state` if the identity changed, persist provider/base/identity,
+/// then plan an initial scan.
+async fn finalize_connect(
+    app: &tauri::AppHandle,
+    provider: &str,
+    identity_host: Option<&str>,
+    user: Option<&str>,
+    base_path: Option<String>,
+) -> Result<(), String> {
+    let cfg = rclone_config_path(app)?;
+    let base = base_path.as_deref();
+
+    // Reachability / credential check against the base dir (which exists before the
+    // ClipSnip tree does).
+    run_rclone(app, remote::lsd_check_args(&cfg, &remote_base_target(base)))
+        .await
+        .map_err(|e| format!("Could not reach the remote: {e}"))?;
+    // Create the remote tree.
+    run_rclone(app, remote::mkdir_args(&cfg, &remote::remote_dir(base, "Clips"))).await?;
+    run_rclone(app, remote::mkdir_args(&cfg, &remote::remote_dir(base, "Thumbnails"))).await?;
+
+    let identity = remote::identity(provider, identity_host, user, base);
+    let root = resolve_root(app)?;
+    let mut settings =
+        setup::read_settings(&root).ok_or_else(|| "No settings found.".to_string())?;
+    // A different remote than last time invalidates the whole upload ledger.
+    if settings.remote_identity.as_deref() != Some(identity.as_str()) {
+        let conn = open_library(app)?;
+        library::sync_state_clear(&conn)?;
+    }
+    settings.remote_provider = Some(provider.to_string());
+    settings.remote_base_path = base_path.clone();
+    settings.remote_identity = Some(identity);
+    setup::write_settings(&root, &settings)?;
+
+    set_status(app, "idle", None);
+    enqueue_sync_scan(app);
+    Ok(())
+}
+
+/// Connects an SFTP remote (password or key-file auth), validates it, and starts
+/// syncing.
+#[tauri::command]
+async fn storage_connect_sftp(
+    app: tauri::AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    password: Option<String>,
+    key_file: Option<String>,
+    base_path: Option<String>,
+) -> Result<(), String> {
+    let cfg = rclone_config_path(&app)?;
+    let auth = match (password, key_file) {
+        (Some(p), _) if !p.is_empty() => remote::SftpAuth::Password(p),
+        (_, Some(k)) if !k.is_empty() => remote::SftpAuth::KeyFile(k),
+        _ => return Err("SFTP requires a password or a key file.".to_string()),
+    };
+    run_rclone(&app, remote::create_sftp_args(&cfg, &host, port, &user, &auth)).await?;
+    let identity_host = format!("{host}:{port}");
+    finalize_connect(&app, "sftp", Some(&identity_host), Some(&user), base_path).await
+}
+
+/// Connects an OAuth remote (Dropbox / Google Drive). rclone opens the system
+/// browser and blocks until the user approves — this can take minutes.
+#[tauri::command]
+async fn storage_connect_oauth(
+    app: tauri::AppHandle,
+    provider: String,
+    base_path: Option<String>,
+) -> Result<(), String> {
+    let cfg = rclone_config_path(&app)?;
+    set_status(&app, "syncing", Some("Waiting for browser authorization…".to_string()));
+    let result = run_rclone(&app, remote::create_oauth_args(&cfg, &provider)).await;
+    if let Err(e) = result {
+        set_status(&app, "error", Some(format!("Authorization failed: {e}")));
+        return Err(e);
+    }
+    finalize_connect(&app, &provider, None, None, base_path).await
+}
+
+/// Disconnects the remote: deletes the rclone remote config, clears
+/// provider/base and the queue, but KEEPS `remote_identity` and `sync_state` so
+/// reconnecting the same remote resumes rather than re-uploading.
+#[tauri::command]
+async fn storage_disconnect(app: tauri::AppHandle) -> Result<(), String> {
+    let cfg = rclone_config_path(&app)?;
+    let _ = run_rclone(&app, remote::delete_remote_args(&cfg)).await; // best-effort
+    let root = resolve_root(&app)?;
+    if let Some(mut settings) = setup::read_settings(&root) {
+        settings.remote_provider = None;
+        settings.remote_base_path = None;
+        setup::write_settings(&root, &settings)?;
+    }
+    {
+        let engine = app.state::<SyncEngine>();
+        engine.queue.lock().unwrap().clear();
+        engine.retries.lock().unwrap().clear();
+    }
+    set_status(&app, "idle", None);
+    Ok(())
+}
+
+/// Current sync status snapshot.
+#[tauri::command]
+fn storage_status(app: tauri::AppHandle) -> Result<StorageStatus, String> {
+    Ok(current_status(&app))
+}
+
+/// Lists the remote/local diff for the "what's on each side" view. Fails fast on
+/// any rclone error (no partial diff).
+#[tauri::command]
+async fn storage_scan_diff(app: tauri::AppHandle) -> Result<sync::SyncDiff, String> {
+    let (root, base) = require_connection(&app)?;
+    let cfg = rclone_config_path(&app)?;
+    let json = run_rclone(
+        &app,
+        remote::lsjson_args(&cfg, &remote::remote_dir(base.as_deref(), "Clips")),
+    )
+    .await?;
+    let remote_files = remote::parse_lsjson(&json)?;
+    let clips_dir = root.join("Clips");
+    let local: Vec<(String, u64, i64)> = scan_local_files(&clips_dir)
+        .into_iter()
+        .filter_map(|(p, s, m)| sync::rel_name(&clips_dir, &p).map(|rel| (rel, s, m)))
+        .collect();
+    Ok(sync::diff(&local, &remote_files))
+}
+
+/// Downloads + ingests the named remote clips (never automatic — user-initiated),
+/// recording `sync_state` and applying the remote index metadata. Returns the
+/// number successfully imported.
+#[tauri::command]
+async fn storage_import_clips(app: tauri::AppHandle, rel_names: Vec<String>) -> Result<u32, String> {
+    let (root, base) = require_connection(&app)?;
+    let cfg = rclone_config_path(&app)?;
+    let clips_dir = root.join("Clips");
+    let mut imported = 0u32;
+
+    for rel in &rel_names {
+        let remote = remote::remote_dir(base.as_deref(), &format!("Clips/{rel}"));
+        let local = join_rel(&clips_dir, rel);
+        if let Some(parent) = local.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let local_str = local.to_string_lossy().to_string();
+        run_rclone(&app, remote::download_args(&cfg, &remote, &local_str)).await?;
+
+        if let Ok(Some(row)) = ingest_file_inner(&app, &local).await {
+            let _ = app.emit("clip-added", row);
+            let size = std::fs::metadata(&local).map(|m| m.len()).unwrap_or(0);
+            let mtime = file_mtime_unix(&local);
+            let conn = open_library(&app)?;
+            library::sync_state_upsert(&conn, &local_str, size, mtime, rel)?;
+            imported += 1;
+        }
+    }
+
+    apply_remote_index(&app, &root, base.as_deref(), &rel_names).await;
+    emit_status(&app);
+    Ok(imported)
+}
+
+/// Deletes a clip from the remote: the video, its thumbnail (best-effort), the
+/// `sync_state` row, and refreshes the remote index.
+#[tauri::command]
+async fn storage_delete_remote(app: tauri::AppHandle, rel_name: String) -> Result<(), String> {
+    let (root, base) = require_connection(&app)?;
+    let cfg = rclone_config_path(&app)?;
+    run_rclone(
+        &app,
+        remote::deletefile_args(&cfg, &remote::remote_dir(base.as_deref(), &format!("Clips/{rel_name}"))),
+    )
+    .await?;
+    let _ = run_rclone(
+        &app,
+        remote::deletefile_args(
+            &cfg,
+            &remote::remote_dir(base.as_deref(), &format!("Thumbnails/{}.jpg", thumb_stem(&rel_name))),
+        ),
+    )
+    .await;
+    {
+        let conn = open_library(&app)?;
+        library::sync_state_remove_by_remote_name(&conn, &rel_name)?;
+    }
+    refresh_remote_index(&app, &root, base.as_deref()).await?;
+    emit_status(&app);
+    Ok(())
+}
+
+/// Fetches a remote clip's thumbnail into `Cache/remote-thumbs/` and returns the
+/// local path (served lazily in the diff window via the media server).
+#[tauri::command]
+async fn storage_download_thumb(app: tauri::AppHandle, rel_name: String) -> Result<String, String> {
+    let (root, base) = require_connection(&app)?;
+    let cfg = rclone_config_path(&app)?;
+    let stem = thumb_stem(&rel_name);
+    let dir = root.join("Cache").join("remote-thumbs");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let local = dir.join(format!("{stem}.jpg"));
+    let local_str = local.to_string_lossy().to_string();
+    let remote = remote::remote_dir(base.as_deref(), &format!("Thumbnails/{stem}.jpg"));
+    run_rclone(&app, remote::download_args(&cfg, &remote, &local_str)).await?;
+    Ok(local_str)
+}
+
+/// Fire-and-forget: re-plan the upload queue now (e.g. from a "Sync now" button).
+#[tauri::command]
+fn sync_now(app: tauri::AppHandle) {
+    enqueue_sync_scan(&app);
+}
+
+/// Reads the sync-related settings (size targets + tray toggle).
+#[tauri::command]
+fn get_sync_settings(app: tauri::AppHandle) -> Result<SyncSettings, String> {
+    let root = resolve_root(&app)?;
+    let s = setup::read_settings(&root).ok_or_else(|| "No settings found.".to_string())?;
+    Ok(SyncSettings {
+        upload_size_percent: s.upload_size_percent,
+        local_size_percent: s.local_size_percent,
+        tray_enabled: s.tray_enabled.unwrap_or(true),
+    })
+}
+
+/// Persists the sync-related settings. Percents, when set, must be integers in
+/// 1–99 (IPC input is not trusted even though the UI validates too).
+#[tauri::command]
+fn set_sync_settings(
+    app: tauri::AppHandle,
+    upload_size_percent: Option<u8>,
+    local_size_percent: Option<u8>,
+    tray_enabled: bool,
+) -> Result<(), String> {
+    for p in [upload_size_percent, local_size_percent].into_iter().flatten() {
+        if !(1..=99).contains(&p) {
+            return Err(format!("Size percent must be between 1 and 99 (got {p})."));
+        }
+    }
+    let root = resolve_root(&app)?;
+    let mut s = setup::read_settings(&root).ok_or_else(|| "No settings found.".to_string())?;
+    s.upload_size_percent = upload_size_percent;
+    s.local_size_percent = local_size_percent;
+    s.tray_enabled = Some(tray_enabled);
+    setup::write_settings(&root, &s)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // WebKitGTK's EGL platform-display init aborts with "Could not create
@@ -1309,9 +2188,22 @@ pub fn run() {
             app.manage(RelocateJob::default());
             app.manage(BundleJob::default());
             app.manage(DeviceProbe::default());
+            app.manage(SyncEngine::default());
             // Start auto-import if already configured; a first-run launch starts
             // it from complete_setup instead.
             start_watching(app.handle());
+            // Resume any pending uploads planned before the last shutdown.
+            enqueue_sync_scan(app.handle());
+            // Periodic re-plan: pick up library additions and sync uploads the
+            // live watcher may have missed. 300 s per spec.
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+                    scan_folders_now(&handle);
+                    enqueue_sync_scan(&handle);
+                }
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1350,7 +2242,18 @@ pub fn run() {
             cancel_bundle,
             list_export_devices,
             get_export_device,
-            set_export_device
+            set_export_device,
+            storage_connect_sftp,
+            storage_connect_oauth,
+            storage_disconnect,
+            storage_status,
+            storage_scan_diff,
+            storage_import_clips,
+            storage_delete_remote,
+            storage_download_thumb,
+            sync_now,
+            get_sync_settings,
+            set_sync_settings
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
