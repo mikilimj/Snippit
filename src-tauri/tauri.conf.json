@@ -37,7 +37,8 @@
     ],
     "externalBin": [
       "binaries/ffmpeg",
-      "binaries/ffprobe"
+      "binaries/ffprobe",
+      "binaries/rclone"
     ],
     "linux": {
       "appimage": {
