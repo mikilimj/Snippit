@@ -309,3 +309,79 @@ export function completeSetup(
 ): Promise<SetupResult> {
   return invoke<SetupResult>("complete_setup", { rootPath, ingestionMode, sourceFolder });
 }
+
+export interface StorageStatus {
+  provider: string | null;
+  state: "idle" | "syncing" | "error";
+  message: string | null;
+  syncedCount: number;
+  pendingCount: number;
+}
+
+export interface RemoteFile {
+  path: string;
+  size: number;
+  modTime: number;
+}
+
+export interface SyncDiffResult {
+  remoteOnly: RemoteFile[];
+  localOnly: string[];
+}
+
+export interface SyncSettings {
+  uploadSizePercent: number | null;
+  localSizePercent: number | null;
+  trayEnabled: boolean;
+}
+
+export function storageConnectSftp(opts: {
+  host: string; port: number; user: string;
+  password?: string; keyFile?: string; basePath?: string;
+}): Promise<void> {
+  return invoke<void>("storage_connect_sftp", opts);
+}
+
+export function storageConnectOauth(provider: "dropbox" | "drive", basePath?: string): Promise<void> {
+  return invoke<void>("storage_connect_oauth", { provider, basePath });
+}
+
+export function storageDisconnect(): Promise<void> {
+  return invoke<void>("storage_disconnect");
+}
+
+export function storageStatus(): Promise<StorageStatus> {
+  return invoke<StorageStatus>("storage_status");
+}
+
+export function storageScanDiff(): Promise<SyncDiffResult> {
+  return invoke<SyncDiffResult>("storage_scan_diff");
+}
+
+export function storageImportClips(relNames: string[]): Promise<number> {
+  return invoke<number>("storage_import_clips", { relNames });
+}
+
+export function storageDeleteRemote(relName: string): Promise<void> {
+  return invoke<void>("storage_delete_remote", { relName });
+}
+
+export function storageDownloadThumb(relName: string): Promise<string> {
+  return invoke<string>("storage_download_thumb", { relName });
+}
+
+export function syncNow(): Promise<void> {
+  return invoke<void>("sync_now");
+}
+
+export function getSyncSettings(): Promise<SyncSettings> {
+  return invoke<SyncSettings>("get_sync_settings");
+}
+
+export function setSyncSettings(s: SyncSettings): Promise<void> {
+  return invoke<void>("set_sync_settings", {
+    uploadSizePercent: s.uploadSizePercent,
+    localSizePercent: s.localSizePercent,
+    trayEnabled: s.trayEnabled,
+  });
+}
