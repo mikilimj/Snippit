@@ -1402,6 +1402,12 @@ fn resolve_root(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(PathBuf::from(root))
 }
 
+/// The persisted settings, or None before setup has run.
+fn resolve_settings(app: &tauri::AppHandle) -> Option<setup::SetupSettings> {
+    let root = resolve_root(app).ok()?;
+    setup::read_settings(&root)
+}
+
 /// Requires an active remote connection, returning `(root, base_path)`. Errors when
 /// no provider is configured — every remote-facing command gates on this.
 fn require_connection(app: &tauri::AppHandle) -> Result<(PathBuf, Option<String>), String> {
@@ -2230,7 +2236,47 @@ pub fn run() {
                     enqueue_sync_scan(&handle);
                 }
             });
+            // Tray icon: lets the app keep syncing with the window closed. Built
+            // unconditionally — the close-to-tray behavior itself is gated on the
+            // tray_enabled setting in on_window_event below.
+            {
+                use tauri::menu::{Menu, MenuItem};
+                use tauri::tray::TrayIconBuilder;
+
+                let open_item = MenuItem::with_id(app, "open", "Open ClipSnip", true, None::<&str>)?;
+                let sync_item = MenuItem::with_id(app, "sync", "Sync now", true, None::<&str>)?;
+                let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+                let menu = Menu::with_items(app, &[&open_item, &sync_item, &quit_item])?;
+                TrayIconBuilder::with_id("main")
+                    .icon(app.default_window_icon().unwrap().clone())
+                    .menu(&menu)
+                    .on_menu_event(|app, event| match event.id.as_ref() {
+                        "open" => {
+                            if let Some(w) = app.get_webview_window("main") {
+                                let _ = w.show();
+                                let _ = w.set_focus();
+                            }
+                        }
+                        "sync" => enqueue_sync_scan(app),
+                        "quit" => app.exit(0),
+                        _ => {}
+                    })
+                    .build(app)?;
+            }
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            // Close-to-tray (default on): hide instead of exiting so background
+            // sync keeps running; the tray menu restores or quits.
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                let tray_on = resolve_settings(window.app_handle())
+                    .map(|s| s.tray_enabled.unwrap_or(true))
+                    .unwrap_or(true);
+                if tray_on {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
         })
         .invoke_handler(tauri::generate_handler![
             probe_clip,
