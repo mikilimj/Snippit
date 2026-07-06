@@ -56,6 +56,7 @@ export function StorageConnectForm({ onConnected }: { onConnected: () => void })
   function selectProvider(p: Provider) {
     setProvider(p);
     setError(null);
+    setOauthBasePath("");
   }
 
   async function pickKeyFile() {
@@ -288,6 +289,12 @@ export function StorageSection({ onOpenDiff }: { onOpenDiff?: () => void }) {
         setSettingsState(s);
         setUploadMode(percentToMode(s.uploadSizePercent));
         setLocalMode(percentToMode(s.localSizePercent));
+        if (s.uploadSizePercent != null && percentToMode(s.uploadSizePercent) === "custom") {
+          setUploadCustom(String(s.uploadSizePercent));
+        }
+        if (s.localSizePercent != null && percentToMode(s.localSizePercent) === "custom") {
+          setLocalCustom(String(s.localSizePercent));
+        }
       })
       .catch(() => {});
   }, []);
@@ -301,12 +308,14 @@ export function StorageSection({ onOpenDiff }: { onOpenDiff?: () => void }) {
 
   async function saveSettings(partial: Partial<SyncSettings>) {
     setSettingsMsg(null);
-    setSettingsState(prev => {
-      if (!prev) return prev;
-      const next = { ...prev, ...partial };
-      setSyncSettings(next).catch(e => setSettingsMsg(`Couldn't save size settings: ${e}`));
-      return next;
-    });
+    if (!settings) return;
+    const next = { ...settings, ...partial };
+    setSettingsState(next);
+    try {
+      await setSyncSettings(next);
+    } catch (e) {
+      setSettingsMsg(`Couldn't save size settings: ${e}`);
+    }
   }
 
   function handleUploadModeChange(m: SizeMode) {
