@@ -196,8 +196,15 @@ pub fn build_size_reencode_args(
     args.extend(device.input_args());
     args.extend(["-i".into(), source.into()]);
     args.extend(["-map".into(), "0:v:0".into(), "-map".into(), "0:a?".into()]);
+    if let Some(suffix) = device.filter_suffix() {
+        args.extend(["-vf".to_string(), suffix.to_string()]);
+    }
     args.extend(device.video_bitrate_args(video_kbps));
     args.extend(["-c:a".into(), "aac".into(), "-b:a".into(), format!("{audio_kbps}k")]);
+    args.extend([
+        "-movflags".to_string(),
+        "+faststart".to_string(),
+    ]);
     args.push(output.into());
     args
 }
@@ -385,6 +392,28 @@ mod tests {
         // 100 MB file at 50% -> 50.0 MB target
         assert!((percent_target_mb(100 * 1024 * 1024, 50) - 50.0).abs() < 1e-9);
         assert!((percent_target_mb(10 * 1024 * 1024, 25) - 2.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn build_size_reencode_args_with_vaapi_includes_hwupload_filter() {
+        let args = build_size_reencode_args(
+            "/c/in.mp4", "/c/out.mp4", 2500, 128, &crate::export::ExportDevice::Vaapi);
+        let joined = args.join(" ");
+        // VAAPI requires hwupload filter to convert software frames to hardware.
+        assert!(joined.contains("-vf"), "Missing -vf flag for VAAPI filter");
+        assert!(joined.contains("hwupload"), "Missing hwupload filter for VAAPI");
+        assert!(joined.contains("format=nv12"), "Missing format=nv12 for VAAPI");
+    }
+
+    #[test]
+    fn build_size_reencode_args_includes_faststart() {
+        let args = build_size_reencode_args(
+            "/c/in.mp4", "/c/out.mp4", 2500, 128, &crate::export::ExportDevice::Cpu);
+        let joined = args.join(" ");
+        // faststart puts the moov atom at the start for streaming/upload.
+        assert!(joined.contains("-movflags"), "Missing -movflags flag");
+        assert!(joined.contains("+faststart"), "Missing +faststart");
+        assert!(joined.ends_with("/c/out.mp4"));
     }
 
     #[test]
