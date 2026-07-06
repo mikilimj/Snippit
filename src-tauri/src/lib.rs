@@ -2123,6 +2123,17 @@ fn sync_now(app: tauri::AppHandle) {
     enqueue_sync_scan(&app);
 }
 
+/// Rel-names (paths relative to `Clips/`) of every clip recorded as uploaded.
+/// Drives the library panel's "Delete from server" enablement.
+#[tauri::command]
+fn storage_synced_rel_names(app: tauri::AppHandle) -> Result<Vec<String>, String> {
+    let conn = open_library(&app)?;
+    Ok(library::sync_state_list(&conn)?
+        .into_iter()
+        .map(|r| r.remote_name)
+        .collect())
+}
+
 /// Reads the sync-related settings (size targets + tray toggle).
 #[tauri::command]
 fn get_sync_settings(app: tauri::AppHandle) -> Result<SyncSettings, String> {
@@ -2266,6 +2277,7 @@ pub fn run() {
             storage_import_clips,
             storage_delete_remote,
             storage_download_thumb,
+            storage_synced_rel_names,
             sync_now,
             get_sync_settings,
             set_sync_settings

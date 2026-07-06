@@ -160,6 +160,17 @@
   color: var(--text);
 }
 
+.library-cloud-delete { font-size: 13px; }
+.library-cloud-delete:disabled {
+  cursor: default;
+  opacity: 0;
+}
+.library-item:hover .library-cloud-delete:disabled { opacity: 0.35; }
+.library-cloud-delete:disabled:hover {
+  background: transparent;
+  color: var(--text-faint);
+}
+
 .library-name {
   font-size: 12px;
   overflow: hidden;
