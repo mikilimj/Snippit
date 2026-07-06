@@ -1657,21 +1657,36 @@ fn start_sync_worker(app: &tauri::AppHandle) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         sync_worker(&app).await;
-        app.state::<SyncEngine>()
-            .worker_running
-            .store(false, Ordering::SeqCst);
     });
 }
 
 /// Drains the derived queue one file at a time. On failure: retry counter++,
 /// 5-strike drop, 30 s backoff, error status. Emits `sync-status` on every
 /// transition.
+///
+/// The empty-queue exit and the `worker_running = false` store happen inside
+/// the same queue-lock critical section (no `.await` in between), so a
+/// concurrent `enqueue_sync_scan` can never observe "queue non-empty, no
+/// worker, worker_running == true": its push either lands before this
+/// `pop_front` (and gets drained in this same loop) or after the store (in
+/// which case its `start_sync_worker` call wins the `swap` and spawns a fresh
+/// worker). This closes the lost-wakeup race without holding a MutexGuard
+/// across an await point.
 async fn sync_worker(app: &tauri::AppHandle) {
     loop {
+        let engine = app.state::<SyncEngine>();
         let path = {
-            let engine = app.state::<SyncEngine>();
             let mut q = engine.queue.lock().unwrap();
-            q.pop_front()
+            match q.pop_front() {
+                Some(path) => Some(path),
+                None => {
+                    // Still holding the queue lock: no enqueue can slip a push
+                    // in between "queue observed empty" and "worker marked not
+                    // running".
+                    engine.worker_running.store(false, Ordering::SeqCst);
+                    None
+                }
+            }
         };
         let Some(path) = path else {
             break;
