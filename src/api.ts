@@ -370,6 +370,10 @@ export function storageDownloadThumb(relName: string): Promise<string> {
   return invoke<string>("storage_download_thumb", { relName });
 }
 
+export function storageSyncedRelNames(): Promise<string[]> {
+  return invoke<string[]>("storage_synced_rel_names");
+}
+
 export function syncNow(): Promise<void> {
   return invoke<void>("sync_now");
 }
