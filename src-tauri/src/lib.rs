@@ -7,6 +7,7 @@ pub mod media;
 pub mod relocate;
 pub mod watcher;
 pub mod remote;
+pub mod sync;
 mod media_server;
 
 use export::{
