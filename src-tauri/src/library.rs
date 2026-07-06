@@ -38,6 +38,16 @@ pub struct Folder {
     pub name: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncRow {
+    pub path: String,
+    pub size_bytes: u64,
+    pub mtime: i64,
+    pub remote_name: String,
+    pub uploaded_at: i64,
+}
+
 fn now_unix() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -85,6 +95,13 @@ pub fn init_db(conn: &Connection) -> Result<(), String> {
             clip_id   INTEGER NOT NULL,
             folder_id INTEGER NOT NULL,
             PRIMARY KEY (clip_id, folder_id)
+        );
+        CREATE TABLE IF NOT EXISTS sync_state (
+            path TEXT PRIMARY KEY,
+            size_bytes INTEGER NOT NULL,
+            mtime INTEGER NOT NULL,
+            remote_name TEXT NOT NULL,
+            uploaded_at INTEGER NOT NULL
         );",
     )
     .map_err(|e| e.to_string())
@@ -515,6 +532,62 @@ pub fn list_unsorted_clips(conn: &Connection) -> Result<Vec<ClipRow>, String> {
     Ok(rows)
 }
 
+pub fn sync_state_upsert(
+    conn: &Connection,
+    path: &str,
+    size_bytes: u64,
+    mtime: i64,
+    remote_name: &str,
+) -> Result<(), String> {
+    conn.execute(
+        "INSERT INTO sync_state (path, size_bytes, mtime, remote_name, uploaded_at)
+         VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT(path) DO UPDATE SET
+           size_bytes = ?2, mtime = ?3, remote_name = ?4, uploaded_at = ?5",
+        params![path, size_bytes as i64, mtime, remote_name, now_unix()],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub fn sync_state_list(conn: &Connection) -> Result<Vec<SyncRow>, String> {
+    let mut stmt = conn
+        .prepare("SELECT path, size_bytes, mtime, remote_name, uploaded_at FROM sync_state")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(SyncRow {
+                path: r.get(0)?,
+                size_bytes: r.get::<_, i64>(1)?.max(0) as u64,
+                mtime: r.get(2)?,
+                remote_name: r.get(3)?,
+                uploaded_at: r.get(4)?,
+            })
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|e| e.to_string())?;
+    Ok(rows)
+}
+
+pub fn sync_state_remove(conn: &Connection, path: &str) -> Result<(), String> {
+    conn.execute("DELETE FROM sync_state WHERE path = ?1", params![path])
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub fn sync_state_remove_by_remote_name(conn: &Connection, remote_name: &str) -> Result<(), String> {
+    conn.execute("DELETE FROM sync_state WHERE remote_name = ?1", params![remote_name])
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub fn sync_state_clear(conn: &Connection) -> Result<(), String> {
+    conn.execute("DELETE FROM sync_state", [])
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -840,5 +913,32 @@ mod tests {
         assert_eq!(paths.len(), 1);
         assert!(paths[0].ends_with("y.mp4"));
         assert!(!paths.iter().any(|p| p.contains("x.mp4"))); // old library gone
+    }
+
+    #[test]
+    fn sync_state_upsert_list_roundtrip_and_update() {
+        let conn = mem_db();
+        sync_state_upsert(&conn, "/root/Clips/a.mp4", 100, 10, "a.mp4").unwrap();
+        sync_state_upsert(&conn, "/root/Clips/a.mp4", 200, 20, "a.mp4").unwrap();
+        let rows = sync_state_list(&conn).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].size_bytes, 200);
+        assert_eq!(rows[0].mtime, 20);
+        assert_eq!(rows[0].remote_name, "a.mp4");
+        assert!(rows[0].uploaded_at > 0);
+    }
+
+    #[test]
+    fn sync_state_remove_variants_and_clear() {
+        let conn = mem_db();
+        sync_state_upsert(&conn, "/r/Clips/a.mp4", 1, 1, "a.mp4").unwrap();
+        sync_state_upsert(&conn, "/r/Clips/s/b.mp4", 1, 1, "s/b.mp4").unwrap();
+        sync_state_remove(&conn, "/r/Clips/a.mp4").unwrap();
+        assert_eq!(sync_state_list(&conn).unwrap().len(), 1);
+        sync_state_remove_by_remote_name(&conn, "s/b.mp4").unwrap();
+        assert_eq!(sync_state_list(&conn).unwrap().len(), 0);
+        sync_state_upsert(&conn, "/r/Clips/c.mp4", 1, 1, "c.mp4").unwrap();
+        sync_state_clear(&conn).unwrap();
+        assert!(sync_state_list(&conn).unwrap().is_empty());
     }
 }
