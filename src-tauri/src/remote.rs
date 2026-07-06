@@ -158,8 +158,13 @@ pub fn parse_lsjson(json: &str) -> Result<Vec<RemoteFile>, String> {
         .collect())
 }
 
-/// Minimal RFC3339 → unix seconds (UTC). Returns 0 on anything unparseable —
-/// mod-time is display-only (diff window date column), never a sync decision.
+/// Minimal RFC3339 → unix seconds (UTC). Parses the date/time prefix
+/// (YYYY-MM-DDTHH:MM:SS), skips optional fractional seconds (.digits),
+/// then parses timezone: Z or end-of-string → UTC; +/-HH:MM, +/-HHMM, or +/-HH
+/// → apply offset. Formula: unix = wall_clock_seconds − offset_seconds.
+/// Returns 0 on unparseable date/time prefix; lenient about invalid suffix
+/// (treats it as UTC). Mod-time is display-only (diff window date column),
+/// never a sync decision.
 fn rfc3339_to_unix(s: &str) -> i64 {
     fn num(s: &str, a: usize, b: usize) -> Option<i64> { s.get(a..b)?.parse().ok() }
     let (y, mo, d) = match (num(s, 0, 4), num(s, 5, 7), num(s, 8, 10)) {
@@ -178,7 +183,64 @@ fn rfc3339_to_unix(s: &str) -> i64 {
     let doy = (153 * mp + 2) / 5 + d - 1;
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
     let days = era * 146097 + doe - 719468;
-    days * 86400 + h * 3600 + mi * 60 + sec
+    let wall_clock_seconds = days * 86400 + h * 3600 + mi * 60 + sec;
+
+    // Parse timezone offset after the seconds field (position 19)
+    let offset_seconds = if let Some(suffix) = s.get(19..) {
+        // Skip optional fractional seconds: "." followed by digits
+        let mut pos = 0;
+        if suffix.starts_with('.') {
+            pos = 1;
+            while pos < suffix.len() && suffix.as_bytes()[pos].is_ascii_digit() {
+                pos += 1;
+            }
+        }
+        let tz_part = &suffix[pos..];
+
+        if tz_part.is_empty() {
+            // No timezone specified; assume UTC
+            0
+        } else if tz_part.starts_with('Z') {
+            // UTC
+            0
+        } else if tz_part.starts_with('+') || tz_part.starts_with('-') {
+            let sign = if tz_part.starts_with('+') { 1 } else { -1 };
+            let tz = &tz_part[1..];
+
+            // Try parsing HH:MM, HHMM, or HH
+            let (hours, mins) = if let Some(colon_pos) = tz.find(':') {
+                // Format: HH:MM
+                match (tz[..colon_pos].parse::<i64>(), tz[colon_pos + 1..].parse::<i64>()) {
+                    (Ok(h), Ok(m)) => (h, m),
+                    _ => (0, 0), // Invalid; treat as UTC
+                }
+            } else if tz.len() >= 4 {
+                // Format: HHMM
+                match (tz[..2].parse::<i64>(), tz[2..4].parse::<i64>()) {
+                    (Ok(h), Ok(m)) => (h, m),
+                    _ => (0, 0),
+                }
+            } else if tz.len() >= 2 {
+                // Format: HH
+                match tz[..2].parse::<i64>() {
+                    Ok(h) => (h, 0),
+                    _ => (0, 0),
+                }
+            } else {
+                (0, 0) // Invalid; treat as UTC
+            };
+
+            sign * (hours * 3600 + mins * 60)
+        } else {
+            // Invalid suffix; treat as UTC
+            0
+        }
+    } else {
+        // No suffix at all; assume UTC
+        0
+    };
+
+    wall_clock_seconds - offset_seconds
 }
 
 pub fn identity(
@@ -263,6 +325,17 @@ mod tests {
         assert_eq!(files[0].path, "sub/a.mp4");
         assert_eq!(files[0].size, 1048576);
         assert_eq!(files[0].mod_time, 1783332000);
+    }
+
+    #[test]
+    fn rfc3339_to_unix_handles_timezone_offsets_and_fractional_seconds() {
+        // All represent 2026-07-06T10:00:00Z = 1783332000
+        assert_eq!(rfc3339_to_unix("2026-07-06T10:00:00Z"), 1783332000);
+        assert_eq!(rfc3339_to_unix("2026-07-06T12:00:00+02:00"), 1783332000);
+        assert_eq!(rfc3339_to_unix("2026-07-06T05:00:00-05:00"), 1783332000);
+        assert_eq!(rfc3339_to_unix("2026-07-06T10:00:00.123456789Z"), 1783332000);
+        // Without offset suffix, assume UTC
+        assert_eq!(rfc3339_to_unix("2026-07-06T10:00:00"), 1783332000);
     }
 
     #[test]
