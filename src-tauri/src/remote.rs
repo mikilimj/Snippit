@@ -210,20 +210,22 @@ fn rfc3339_to_unix(s: &str) -> i64 {
             // Try parsing HH:MM, HHMM, or HH
             let (hours, mins) = if let Some(colon_pos) = tz.find(':') {
                 // Format: HH:MM
-                match (tz[..colon_pos].parse::<i64>(), tz[colon_pos + 1..].parse::<i64>()) {
-                    (Ok(h), Ok(m)) => (h, m),
+                match (tz.get(..colon_pos).and_then(|s| s.parse::<i64>().ok()),
+                       tz.get(colon_pos + 1..).and_then(|s| s.parse::<i64>().ok())) {
+                    (Some(h), Some(m)) => (h, m),
                     _ => (0, 0), // Invalid; treat as UTC
                 }
             } else if tz.len() >= 4 {
                 // Format: HHMM
-                match (tz[..2].parse::<i64>(), tz[2..4].parse::<i64>()) {
-                    (Ok(h), Ok(m)) => (h, m),
+                match (tz.get(..2).and_then(|s| s.parse::<i64>().ok()),
+                       tz.get(2..4).and_then(|s| s.parse::<i64>().ok())) {
+                    (Some(h), Some(m)) => (h, m),
                     _ => (0, 0),
                 }
             } else if tz.len() >= 2 {
                 // Format: HH
-                match tz[..2].parse::<i64>() {
-                    Ok(h) => (h, 0),
+                match tz.get(..2).and_then(|s| s.parse::<i64>().ok()) {
+                    Some(h) => (h, 0),
                     _ => (0, 0),
                 }
             } else {
@@ -334,8 +336,18 @@ mod tests {
         assert_eq!(rfc3339_to_unix("2026-07-06T12:00:00+02:00"), 1783332000);
         assert_eq!(rfc3339_to_unix("2026-07-06T05:00:00-05:00"), 1783332000);
         assert_eq!(rfc3339_to_unix("2026-07-06T10:00:00.123456789Z"), 1783332000);
+        assert_eq!(rfc3339_to_unix("2026-07-06T12:00:00+0200"), 1783332000);
+        assert_eq!(rfc3339_to_unix("2026-07-06T12:00:00+02"), 1783332000);
         // Without offset suffix, assume UTC
         assert_eq!(rfc3339_to_unix("2026-07-06T10:00:00"), 1783332000);
+    }
+
+    #[test]
+    fn rfc3339_to_unix_never_panics_on_malformed_tz_suffix() {
+        // Non-ASCII bytes in suffix: should not panic, treat as UTC (offset 0)
+        assert_eq!(rfc3339_to_unix("2026-07-06T10:00:00+1à"), 1783332000);
+        // Garbage timezone: should not panic, treat as UTC
+        assert_eq!(rfc3339_to_unix("2026-07-06T10:00:00+xx:zz"), 1783332000);
     }
 
     #[test]
