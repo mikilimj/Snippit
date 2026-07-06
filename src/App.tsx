@@ -14,6 +14,7 @@ import { Timeline } from "./Timeline";
 import { useResizable } from "./useResizable";
 import { FirstRunWizard } from "./FirstRunWizard";
 import { SettingsModal } from "./SettingsModal";
+import { SyncDiffModal } from "./SyncDiffModal";
 import logo from "./assets/logo.png";
 import "./App.css";
 
@@ -50,6 +51,7 @@ function App() {
   const [segments, setSegments] = useState<SequenceSegment[]>([]);
   const [music, setMusic] = useState<MusicOverlay | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [diffOpen, setDiffOpen] = useState(false);
   const sidebar = useResizable({
     axis: "x",
     defaultSize: 224,
@@ -763,7 +765,23 @@ function App() {
 
   return (
     <div className="app-layout">
-      {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
+      {settingsOpen && (
+        <SettingsModal
+          onClose={() => setSettingsOpen(false)}
+          onOpenDiff={() => {
+            setSettingsOpen(false);
+            setDiffOpen(true);
+          }}
+        />
+      )}
+      {diffOpen && (
+        <SyncDiffModal
+          onClose={() => setDiffOpen(false)}
+          onImported={() => loadView(activeView)}
+          library={library}
+          mediaPort={mediaPort}
+        />
+      )}
       {/* Library sidebar */}
       <aside className="library-panel" style={{ width: sidebar.size }}>
         <div className="brand-row">
