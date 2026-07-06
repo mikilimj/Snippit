@@ -1,4 +1,4 @@
-export type IngestionMode = "import" | "empty" | "watch";
+export type IngestionMode = "import" | "empty" | "watch" | "restore";
 
 export function canContinueFromRootStep(rootPath: string | null): boolean {
   return rootPath !== null && rootPath.trim().length > 0;
@@ -13,4 +13,9 @@ export function canFinishIngestionStep(
     return sourceFolder !== null && sourceFolder.trim().length > 0;
   }
   return true;
+}
+
+// Restore mode's extra step: nothing can be imported until a remote is connected.
+export function canFinishRestoreStep(connected: boolean): boolean {
+  return connected;
 }
