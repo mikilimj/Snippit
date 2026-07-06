@@ -724,6 +724,12 @@ async fn relocate_watched_folder(app: tauri::AppHandle, dest: String) -> Result<
         source_folder: Some(dest.clone()),
         created_at: settings.created_at,
         export_device: settings.export_device,
+        upload_size_percent: settings.upload_size_percent,
+        local_size_percent: settings.local_size_percent,
+        remote_provider: settings.remote_provider,
+        remote_base_path: settings.remote_base_path,
+        remote_identity: settings.remote_identity,
+        tray_enabled: settings.tray_enabled,
     };
     setup::write_settings(&root_path, &updated)?;
     Ok(dest)

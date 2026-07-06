@@ -174,6 +174,34 @@ pub fn video_only_path(cache_dir: &Path, source: &str, mtime: i64) -> PathBuf {
     cache_dir.join(format!("{:x}-vo.{ext}", hash_key(source, mtime)))
 }
 
+/// Target size for a percent-of-original re-encode, in MB (fed to
+/// export::compute_target_bitrates).
+pub fn percent_target_mb(size_bytes: u64, percent: u8) -> f64 {
+    (size_bytes as f64 / (1024.0 * 1024.0)) * (percent as f64 / 100.0)
+}
+
+/// Whole-file single-pass re-encode to a bitrate budget: video per device
+/// (VBV-capped), all audio streams kept and re-encoded to AAC. Used for the
+/// upload-size and local-shrink paths; unlike exports there is no trim window
+/// and no track mixing — streams are preserved 1:1.
+pub fn build_size_reencode_args(
+    source: &str,
+    output: &str,
+    video_kbps: u32,
+    audio_kbps: u32,
+    device: &crate::export::ExportDevice,
+) -> Vec<String> {
+    let mut args: Vec<String> = vec!["-y".into()];
+    args.extend(device.global_args());
+    args.extend(device.input_args());
+    args.extend(["-i".into(), source.into()]);
+    args.extend(["-map".into(), "0:v:0".into(), "-map".into(), "0:a?".into()]);
+    args.extend(device.video_bitrate_args(video_kbps));
+    args.extend(["-c:a".into(), "aac".into(), "-b:a".into(), format!("{audio_kbps}k")]);
+    args.push(output.into());
+    args
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -350,5 +378,26 @@ mod tests {
         // Proxy (.mp4) and thumbnail (.jpg) must never collide in the cache dir.
         let dir = Path::new("/cache");
         assert_ne!(proxy_path(dir, "/v/a.mkv", 111), thumbnail_path(dir, "/v/a.mkv", 111));
+    }
+
+    #[test]
+    fn percent_target_mb_scales_bytes() {
+        // 100 MB file at 50% -> 50.0 MB target
+        assert!((percent_target_mb(100 * 1024 * 1024, 50) - 50.0).abs() < 1e-9);
+        assert!((percent_target_mb(10 * 1024 * 1024, 25) - 2.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn build_size_reencode_args_maps_all_streams_and_sets_bitrates() {
+        let args = build_size_reencode_args(
+            "/c/in.mp4", "/c/out.mp4", 2500, 128, &crate::export::ExportDevice::Cpu);
+        let joined = args.join(" ");
+        assert!(joined.contains("-i /c/in.mp4"));
+        assert!(joined.contains("-map 0:v:0"));
+        assert!(joined.contains("-map 0:a?"));
+        assert!(joined.contains("-b:a 128k"));
+        assert!(joined.contains("2500k"));
+        assert!(joined.ends_with("/c/out.mp4"));
+        assert!(args.contains(&"-y".to_string()));
     }
 }
