@@ -35,3 +35,9 @@ dist-ssr
 # Local AI-tooling state (per-machine; never commit)
 .claude/
 .impeccable/
+
+# makepkg build output (AUR packages are built locally when testing)
+packaging/aur/*/src/
+packaging/aur/*/pkg/
+packaging/aur/*/*.tar.gz
+packaging/aur/*/*.pkg.tar.zst
