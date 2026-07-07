@@ -169,110 +169,112 @@ export function SettingsModal({
           <button className="modal-close" onClick={onClose} aria-label="Close">×</button>
         </div>
 
-        <div className="settings-section">
-          <span className="settings-label">Watched folder</span>
-          {watched === undefined ? (
-            <p className="settings-hint">Loading…</p>
-          ) : watched === null ? (
-            <p className="settings-hint">
-              No watched folder is configured, so there's nothing to relocate here.
-            </p>
-          ) : (
-            <>
-              <p className="settings-path" title={watched}>{watched}</p>
-              <div className="settings-actions">
-                <button className="btn-sm" onClick={moveTo} disabled={moving}>
-                  {moving ? "Moving…" : "Move to…"}
-                </button>
-                {moving && (
-                  <button
-                    className="btn-cancel"
-                    onClick={() => cancelRelocate().catch(() => {})}
-                  >
-                    Cancel
-                  </button>
-                )}
-              </div>
+        <div className="modal-body">
+          <div className="settings-section">
+            <span className="settings-label">Watched folder</span>
+            {watched === undefined ? (
+              <p className="settings-hint">Loading…</p>
+            ) : watched === null ? (
               <p className="settings-hint">
-                Same-disk moves are instant; moving to another disk copies file-by-file and is
-                safe to cancel — nothing is deleted until its copy is verified.
+                No watched folder is configured, so there's nothing to relocate here.
               </p>
-            </>
-          )}
+            ) : (
+              <>
+                <p className="settings-path" title={watched}>{watched}</p>
+                <div className="settings-actions">
+                  <button className="btn-sm" onClick={moveTo} disabled={moving}>
+                    {moving ? "Moving…" : "Move to…"}
+                  </button>
+                  {moving && (
+                    <button
+                      className="btn-cancel"
+                      onClick={() => cancelRelocate().catch(() => {})}
+                    >
+                      Cancel
+                    </button>
+                  )}
+                </div>
+                <p className="settings-hint">
+                  Same-disk moves are instant; moving to another disk copies file-by-file and is
+                  safe to cancel — nothing is deleted until its copy is verified.
+                </p>
+              </>
+            )}
 
-          {moving && progress && <ProgressBar progress={progress} />}
+            {moving && progress && <ProgressBar progress={progress} />}
 
-          {message && (
-            <div className={/fail/i.test(message) ? "msg-error" : "msg-ok"}>{message}</div>
-          )}
-        </div>
-
-        <div className="settings-section">
-          <span className="settings-label">Export encoding</span>
-          <p className="settings-hint">
-            Device used to encode exports (Compatible mode, size targets, and sequences).
-            Fast lossless copies never re-encode, so they're unaffected. GPU encoding is
-            much faster; x264 squeezes slightly better quality into tight size targets.
-          </p>
-          {devices === null ? (
-            <p className="settings-hint">Detecting encoders…</p>
-          ) : (
-            <select
-              className="export-size-select"
-              value={device}
-              onChange={e => chooseDevice(e.target.value)}
-            >
-              {devices.map(d => (
-                <option key={d.id} value={d.id} disabled={!d.available}>
-                  {d.label}
-                  {d.available ? "" : " — not available"}
-                </option>
-              ))}
-            </select>
-          )}
-          {deviceMsg && <div className="msg-error">{deviceMsg}</div>}
-        </div>
-
-        <div className="settings-section">
-          <span className="settings-label">Library bundle</span>
-          <p className="settings-hint">
-            Move your library to another device: export a portable bundle, then import it there and
-            point it at wherever the clips now live. Folders, favorites, and renames carry over.
-          </p>
-          <label className="music-loop">
-            <input
-              type="checkbox"
-              checked={includeFiles}
-              onChange={e => setIncludeFiles(e.target.checked)}
-            />
-            Include clip files (larger bundle)
-          </label>
-          <div className="settings-actions">
-            <button className="btn-sm" onClick={doExport} disabled={bundling}>
-              {bundling ? "Working…" : "Export bundle…"}
-            </button>
-            <button className="btn-sm" onClick={doImport} disabled={bundling}>
-              Import bundle…
-            </button>
-            {bundling && (
-              <button className="btn-cancel" onClick={() => cancelBundle().catch(() => {})}>
-                Cancel
-              </button>
+            {message && (
+              <div className={/fail/i.test(message) ? "msg-error" : "msg-ok"}>{message}</div>
             )}
           </div>
-          <label className="music-loop">
-            <input type="checkbox" checked={replace} onChange={e => setReplace(e.target.checked)} />
-            Replace existing library on import (instead of merging)
-          </label>
 
-          {bundling && bundleProgress && <ProgressBar progress={bundleProgress} />}
+          <div className="settings-section">
+            <span className="settings-label">Export encoding</span>
+            <p className="settings-hint">
+              Device used to encode exports (Compatible mode, size targets, and sequences).
+              Fast lossless copies never re-encode, so they're unaffected. GPU encoding is
+              much faster; x264 squeezes slightly better quality into tight size targets.
+            </p>
+            {devices === null ? (
+              <p className="settings-hint">Detecting encoders…</p>
+            ) : (
+              <select
+                className="export-size-select"
+                value={device}
+                onChange={e => chooseDevice(e.target.value)}
+              >
+                {devices.map(d => (
+                  <option key={d.id} value={d.id} disabled={!d.available}>
+                    {d.label}
+                    {d.available ? "" : " — not available"}
+                  </option>
+                ))}
+              </select>
+            )}
+            {deviceMsg && <div className="msg-error">{deviceMsg}</div>}
+          </div>
 
-          {bundleMsg && (
-            <div className={/fail/i.test(bundleMsg) ? "msg-error" : "msg-ok"}>{bundleMsg}</div>
-          )}
+          <div className="settings-section">
+            <span className="settings-label">Library bundle</span>
+            <p className="settings-hint">
+              Move your library to another device: export a portable bundle, then import it there and
+              point it at wherever the clips now live. Folders, favorites, and renames carry over.
+            </p>
+            <label className="music-loop">
+              <input
+                type="checkbox"
+                checked={includeFiles}
+                onChange={e => setIncludeFiles(e.target.checked)}
+              />
+              Include clip files (larger bundle)
+            </label>
+            <div className="settings-actions">
+              <button className="btn-sm" onClick={doExport} disabled={bundling}>
+                {bundling ? "Working…" : "Export bundle…"}
+              </button>
+              <button className="btn-sm" onClick={doImport} disabled={bundling}>
+                Import bundle…
+              </button>
+              {bundling && (
+                <button className="btn-cancel" onClick={() => cancelBundle().catch(() => {})}>
+                  Cancel
+                </button>
+              )}
+            </div>
+            <label className="music-loop">
+              <input type="checkbox" checked={replace} onChange={e => setReplace(e.target.checked)} />
+              Replace existing library on import (instead of merging)
+            </label>
+
+            {bundling && bundleProgress && <ProgressBar progress={bundleProgress} />}
+
+            {bundleMsg && (
+              <div className={/fail/i.test(bundleMsg) ? "msg-error" : "msg-ok"}>{bundleMsg}</div>
+            )}
+          </div>
+
+          <StorageSection onOpenDiff={onOpenDiff} />
         </div>
-
-        <StorageSection onOpenDiff={onOpenDiff} />
       </div>
     </div>
   );
