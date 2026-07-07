@@ -1,81 +1,110 @@
-# ClipSnip
+<p align="center">
+  <img src="logo.png" alt="ClipSnip logo" width="96" height="96">
+</p>
 
-A small desktop clip-trimming tool built with Tauri (Rust) + React/TypeScript. Open a
-video, mark an in/out point, control each audio track's volume live, and export a
-trimmed clip — losslessly when possible.
+<h1 align="center">ClipSnip</h1>
 
-## How it works
+<p align="center">
+  A fast desktop clip-trimming tool with live multi-track audio mixing,<br>
+  a clip library, and lossless export — built with Tauri (Rust) + React/TypeScript.
+</p>
 
-**Shell:** Tauri 2 wraps a React frontend in a native window (WebKitGTK on Linux,
-WebView2 on Windows, WKWebView on macOS) with a Rust backend. `ffmpeg` and `ffprobe`
-are bundled as sidecar binaries (`src-tauri/binaries/`) — no system install required.
+<p align="center">
+  <a href="https://github.com/mikilimj/ClipSnip/actions/workflows/build.yml"><img src="https://img.shields.io/github/actions/workflow/status/mikilimj/ClipSnip/build.yml" alt="Build status"></a>
+  <img src="https://img.shields.io/badge/version-1.2.0-blue" alt="Version">
+  <img src="https://img.shields.io/badge/platforms-Linux%20%7C%20Windows-lightgrey" alt="Platforms">
+</p>
 
-**Playback:** the frontend doesn't load video files directly into the webview. Custom
-URI protocols are unreliable for media in modern WebKitGTK, so instead the Rust side
-runs a small embedded HTTP server ([media_server.rs](src-tauri/src/media_server.rs))
-bound to `127.0.0.1` on a random port, serving any local file (with HTTP range support
-for seeking) at `/file?path=<absolute-path>`. The `<video>` element just points at that
-URL — real HTTP works uniformly across all three platforms.
+Open a video, mark an in/out point, control each audio track's volume live, and
+export a trimmed clip — losslessly when possible, no re-encode required for the
+common case. `ffmpeg`, `ffprobe`, and `rclone` ship as sidecar binaries, so there's
+nothing to install separately.
 
-**Probing:** opening a clip shells out to the bundled `ffprobe` to read duration,
-resolution, codec, and the list of audio tracks ([probe.rs](src-tauri/src/probe.rs)).
+## Features
 
-**Trimming:** in/out points are set from the current playhead (`I` / `O` keys or
-buttons) and rendered on a custom scrub timeline ([Timeline.tsx](src/Timeline.tsx)).
+- **Trim with instant preview** — set in/out points from the current playhead
+  (`I` / `O` keys) on a custom scrub timeline, with a fast lossless (`-c copy`)
+  export path whenever no re-encoding is needed.
+- **Live multi-track audio mixing** — mute or adjust the volume (0–200%) of each
+  audio track independently while previewing, all routed through a single shared
+  `AudioContext` so the OS only ever sees one audio stream. Export mixes exactly
+  what you heard in preview.
+- **Clip library** — a persistent, searchable library with favorites and folders,
+  backed by SQLite, plus watch-mode folders that auto-index new recordings as they
+  land on disk.
+- **Sequence export & compression** — stitch multiple trimmed clips into one
+  export, or re-encode down to a target file size.
+- **Remote storage sync** — mirror your `Clips/` folder to SFTP, Dropbox, or
+  Google Drive via a bundled `rclone` sidecar: automatic background uploads, a
+  diff view for pulling remote-only clips back down, and a full restore path for
+  fresh installs.
+- **Cross-platform, no dependencies to install** — `ffmpeg`/`ffprobe`/`rclone`
+  ship with the app; playback goes through a local HTTP server instead of a
+  custom URI scheme, so media works reliably on Linux, Windows, and macOS.
 
-**Multi-track audio (live preview):** rather than relying on the browser's native
-single-track audio decode, each audio stream in the source file is extracted once to a
-temp `.m4a` (cached by a hash of the source path) via the `prepare_audio_tracks`
-Tauri command. The frontend loads each extracted track into its own `<audio>` element
-and routes it through the Web Audio API (`createMediaElementSource` → per-track
-`GainNode` → `AudioContext.destination`), synced to the video's `currentTime` on
-play/pause/seek. The native `<video>` element is force-muted once this graph is live,
-so the only audible output is the mixed Web Audio graph — this also blocks the
-browser's own built-in volume/mute control from sneaking the video's original audio
-back in. Each track's checkbox (mute) and slider (0–200% volume) directly drives its
-`GainNode`.
+## Getting started
 
-**Export:** `ffmpeg` builds the output from the same in/out points and track
-enable/volume state ([export.rs](src-tauri/src/export.rs)):
-- A single enabled track at 100% volume → fast lossless path: `-c copy` with explicit
-  stream maps, no re-encoding.
-- Two or more enabled tracks, or any non-unity volume → the tracks are combined with
-  an `amix` filter into one output audio stream (video stays stream-copied, audio is
-  re-encoded to AAC), so the export matches what you actually heard in preview.
-
-## Running it
-
-Requires Node.js and the Rust toolchain (`cargo`) installed.
+**Requirements:** [Node.js](https://nodejs.org/) and the [Rust toolchain](https://rustup.rs/)
+(`cargo`).
 
 ```bash
+git clone https://github.com/mikilimj/ClipSnip.git
+cd ClipSnip
 npm install
 ```
 
-**Development** (hot reload for both frontend and Rust changes):
+Run in development mode (hot reload for both the React frontend and Rust backend):
 
 ```bash
 npm run tauri dev
 ```
 
-**Production build** (compiles a release binary + platform installer, e.g. AppImage/
-`.deb` on Linux, under `src-tauri/target/release/bundle/`):
+Build a production binary + platform installer (AppImage/`.deb` on Linux, MSI on
+Windows) under `src-tauri/target/release/bundle/`:
 
 ```bash
 npm run tauri build
 ```
 
-Once built, you can launch the app directly without going through npm, e.g. on Linux:
+Once built, launch the binary directly without going through npm, e.g. on Linux:
 
 ```bash
 ./src-tauri/target/release/clipsnip
 ```
 
-## Tests
+### Arch Linux / AUR
+
+Package definitions are available under [`packaging/aur/`](packaging/aur/):
+`clipsnip` (builds from source) and `clipsnip-bin` (prebuilt `.deb` repackaged).
+
+### Running the tests
 
 ```bash
-# Rust: ffmpeg arg-building logic + an integration test that actually invokes ffmpeg
-cd src-tauri && cargo test
-
-# TypeScript: trim in/out point invariants
-npx vitest run
+npx vitest run              # TypeScript unit tests (pure logic, no UI)
+cd src-tauri && cargo test   # Rust unit + integration tests (real ffmpeg invocations)
 ```
+
+`npm run build` (`tsc` + `vite build`) is the type-check gate for the frontend; no
+separate lint script is configured.
+
+## Architecture
+
+For a deeper look at how playback, audio mixing, export, and storage sync are
+wired together, see [`CLAUDE.md`](CLAUDE.md) — it documents the Rust module
+layout (`src-tauri/src/`), the frontend structure (`src/`), and the reasoning
+behind some of the less obvious design decisions (e.g. why playback goes through
+an HTTP server, why audio never uses `<audio>`/`<video>` elements directly).
+
+## Getting help
+
+- **Bugs and feature requests:** open a [GitHub issue](https://github.com/mikilimj/ClipSnip/issues).
+- **Design background:** the `docs/superpowers/` folder holds the specs and
+  plans written while building major features (first-run setup, resizable
+  panels, GPU export, storage sync), useful context if you're digging into why
+  something works the way it does.
+
+## Maintainers & contributing
+
+ClipSnip is maintained by [@mikilimj](https://github.com/mikilimj). Issues and
+pull requests are welcome — please open an issue to discuss significant changes
+before submitting a PR.
