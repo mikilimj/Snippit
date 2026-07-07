@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { probeClip, exportTrim, exportCompressed, cancelExport, prepareAudioTracks, prepareVideoOnly, getAppRoot, addToLibrary, listLibrary, removeFromLibrary, rescanLibrary, setClipFavorite, renameLibraryClip, createFolder, listFolders, deleteFolder, addClipToFolder, removeClipFromFolder, listClipsInFolder, listUnsortedLibrary, ensureProxy, type ClipMeta, type ClipRow, type ExportMode, type ExportProgress, type Folder, type TrackConfig, type SetupResult } from "./api";
+import { probeClip, exportTrim, exportCompressed, cancelExport, prepareAudioTracks, prepareVideoOnly, getAppRoot, addToLibrary, listLibrary, removeFromLibrary, rescanLibrary, setClipFavorite, renameLibraryClip, createFolder, listFolders, deleteFolder, addClipToFolder, removeClipFromFolder, listClipsInFolder, listUnsortedLibrary, ensureProxy, storageStatus, storageSyncedRelNames, storageDeleteRemote, type ClipMeta, type ClipRow, type ExportMode, type ExportProgress, type Folder, type TrackConfig, type SetupResult } from "./api";
 import { exportSequence, type MusicOverlay } from "./api";
 import { newClipBelongsInView, applyFavorite, applyRename, type LibraryView } from "./libraryView";
 import { previewPath, shouldTryProxy } from "./preview";
@@ -14,11 +14,21 @@ import { Timeline } from "./Timeline";
 import { useResizable } from "./useResizable";
 import { FirstRunWizard } from "./FirstRunWizard";
 import { SettingsModal } from "./SettingsModal";
+import { SyncDiffModal } from "./SyncDiffModal";
 import logo from "./assets/logo.png";
 import "./App.css";
 
 function basename(p: string) {
   return p.split(/[\\/]/).pop() ?? p;
+}
+
+// A clip's rel-name: its path relative to `<root>/Clips/`, `/`-separated — the
+// key sync_state stores. null when the clip lives outside the Clips folder.
+function clipRelName(appRoot: string | null | undefined, path: string): string | null {
+  if (typeof appRoot !== "string") return null;
+  const norm = path.replace(/\\/g, "/");
+  const prefix = `${appRoot.replace(/\\/g, "/").replace(/\/$/, "")}/Clips/`;
+  return norm.startsWith(prefix) ? norm.slice(prefix.length) : null;
 }
 
 function App() {
@@ -50,6 +60,9 @@ function App() {
   const [segments, setSegments] = useState<SequenceSegment[]>([]);
   const [music, setMusic] = useState<MusicOverlay | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [diffOpen, setDiffOpen] = useState(false);
+  const [storageProvider, setStorageProvider] = useState<string | null>(null);
+  const [syncedRels, setSyncedRels] = useState<Set<string>>(new Set());
   const sidebar = useResizable({
     axis: "x",
     defaultSize: 224,
@@ -173,6 +186,32 @@ function App() {
       unlisten.then(f => f());
     };
   }, [appRoot, activeView]);
+
+  // "Delete from server" enablement: which provider is connected, and which
+  // clips sync_state records as uploaded. Refreshed on every sync-status
+  // transition, since finished uploads grow the synced set.
+  useEffect(() => {
+    if (typeof appRoot !== "string") return;
+    let stale = false;
+    const refresh = () => {
+      storageStatus()
+        .then(s => {
+          if (!stale) setStorageProvider(s.provider);
+        })
+        .catch(() => {});
+      storageSyncedRelNames()
+        .then(rels => {
+          if (!stale) setSyncedRels(new Set(rels));
+        })
+        .catch(() => {});
+    };
+    refresh();
+    const unlisten = listen("sync-status", refresh);
+    return () => {
+      stale = true;
+      unlisten.then(f => f());
+    };
+  }, [appRoot]);
 
   // A library import (spec §4.6) rewrites the index wholesale — reload the current
   // view and the folder list when the backend signals it changed.
@@ -662,6 +701,25 @@ function App() {
     }
   }
 
+  // One of only two remote-delete paths (the other is the diff window); the
+  // local file is never touched.
+  async function deleteFromServer(e: React.MouseEvent, entry: ClipRow) {
+    e.stopPropagation();
+    const rel = clipRelName(appRoot, entry.path);
+    if (!rel) return;
+    if (!confirm(`Delete "${entry.displayName}" from the server? The local file is untouched.`)) return;
+    try {
+      await storageDeleteRemote(rel);
+      setSyncedRels(prev => {
+        const next = new Set(prev);
+        next.delete(rel);
+        return next;
+      });
+    } catch (err) {
+      console.error("Failed to delete from server:", err);
+    }
+  }
+
   function startRename(e: React.MouseEvent, entry: ClipRow) {
     e.stopPropagation();
     renameCancelRef.current = false;
@@ -763,7 +821,23 @@ function App() {
 
   return (
     <div className="app-layout">
-      {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
+      {settingsOpen && (
+        <SettingsModal
+          onClose={() => setSettingsOpen(false)}
+          onOpenDiff={() => {
+            setSettingsOpen(false);
+            setDiffOpen(true);
+          }}
+        />
+      )}
+      {diffOpen && (
+        <SyncDiffModal
+          onClose={() => setDiffOpen(false)}
+          onImported={() => loadView(activeView)}
+          library={library}
+          mediaPort={mediaPort}
+        />
+      )}
       {/* Library sidebar */}
       <aside className="library-panel" style={{ width: sidebar.size }}>
         <div className="brand-row">
@@ -916,6 +990,21 @@ function App() {
                   >
                     {entry.favorite ? "★" : "☆"}
                   </button>
+                  {storageProvider !== null && (
+                    <button
+                      className="library-remove library-cloud-delete"
+                      title={
+                        syncedRels.has(clipRelName(appRoot, entry.path) ?? "")
+                          ? "Delete from server (keeps the local file)"
+                          : "Not uploaded to the server yet"
+                      }
+                      aria-label="Delete from server"
+                      disabled={!syncedRels.has(clipRelName(appRoot, entry.path) ?? "")}
+                      onClick={e => deleteFromServer(e, entry)}
+                    >
+                      ☁
+                    </button>
+                  )}
                   {folders.length > 0 && (
                     <select
                       className="library-folder-select"
