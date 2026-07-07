@@ -20,6 +20,15 @@ export a trimmed clip — losslessly when possible, no re-encode required for th
 common case. `ffmpeg`, `ffprobe`, and `rclone` ship as sidecar binaries, so there's
 nothing to install separately.
 
+> [!IMPORTANT]
+> **ClipSnip does not record anything.** It's an editor for clips you already
+> have on disk — trim, mix, and export. To capture gameplay or your screen in
+> the first place, pair it with a dedicated recorder, for example:
+>
+> - **[GPU Screen Recorder](https://git.dec05eba.com/gpu-screen-recorder/about/)** (Linux) — recommended, low-overhead GPU-accelerated capture
+> - **[OBS Studio](https://obsproject.com/)** (Linux/Windows/macOS) — full-featured, widely used
+> - **Steam** built-in game recording (Linux/Windows/macOS, via the Steam client)
+
 ## Features
 
 - **Trim with instant preview** — set in/out points from the current playhead
