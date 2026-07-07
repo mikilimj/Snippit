@@ -21,6 +21,24 @@ pub struct SetupSettings {
     /// keeps settings.json files from before this field parseable; None = CPU.
     #[serde(default)]
     pub export_device: Option<String>,
+    /// Upload size target as percent of original file size (1–100). None = disabled.
+    #[serde(default)]
+    pub upload_size_percent: Option<u8>,
+    /// Local shrink target as percent of original file size (1–100). None = disabled.
+    #[serde(default)]
+    pub local_size_percent: Option<u8>,
+    /// Remote sync provider: "sftp", "dropbox", "drive", etc. None = not configured.
+    #[serde(default)]
+    pub remote_provider: Option<String>,
+    /// Remote base path for synced files. None = not configured.
+    #[serde(default)]
+    pub remote_base_path: Option<String>,
+    /// Remote auth identity (token/credentials reference). None = not configured.
+    #[serde(default)]
+    pub remote_identity: Option<String>,
+    /// Tray icon enabled. None = true (enabled by default).
+    #[serde(default)]
+    pub tray_enabled: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -169,6 +187,12 @@ pub fn complete_setup_at(
         source_folder: source_folder.map(|p| p.to_string_lossy().to_string()),
         created_at: now_unix(),
         export_device: None,
+        upload_size_percent: None,
+        local_size_percent: None,
+        remote_provider: None,
+        remote_base_path: None,
+        remote_identity: None,
+        tray_enabled: None,
     };
     write_settings(root, &settings)?;
     write_pointer_file(config_dir, &root.to_string_lossy())?;
@@ -298,6 +322,12 @@ mod tests {
             source_folder: Some("/rec/out".to_string()),
             created_at: 42,
             export_device: Some("vaapi".to_string()),
+            upload_size_percent: None,
+            local_size_percent: None,
+            remote_provider: None,
+            remote_base_path: None,
+            remote_identity: None,
+            tray_enabled: None,
         };
         write_settings(&root, &settings).unwrap();
         let read = read_settings(&root).unwrap();
@@ -364,5 +394,21 @@ mod tests {
         let root = temp_subdir("complete_import_missing_root");
         let config_dir = temp_subdir("complete_import_missing_config");
         assert!(complete_setup_at(&root, &config_dir, "import", None).is_err());
+    }
+
+    #[test]
+    fn read_settings_parses_files_without_sync_fields() {
+        let root = temp_subdir("read_settings_presync");
+        fs::write(
+            root.join("settings.json"),
+            r#"{"ingestion_mode":"watch","source_folder":"/rec","created_at":1}"#,
+        )
+        .unwrap();
+        let read = read_settings(&root).unwrap();
+        assert_eq!(read.upload_size_percent, None);
+        assert_eq!(read.local_size_percent, None);
+        assert_eq!(read.remote_provider, None);
+        assert_eq!(read.remote_identity, None);
+        assert_eq!(read.tray_enabled, None);
     }
 }
