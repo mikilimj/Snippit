@@ -45,11 +45,14 @@ pub fn create_sftp_args(
     auth: &SftpAuth,
 ) -> Vec<String> {
     let mut args = base_args(config_path);
+    args.extend(["config".into(), "create".into()]);
+    // --obscure belongs to `config create`; before the subcommand rclone would
+    // parse it as a value-taking global flag and swallow "config".
     if matches!(auth, SftpAuth::Password(_)) {
         args.push("--obscure".into());
     }
     args.extend([
-        "config".into(), "create".into(), REMOTE_NAME.into(), "sftp".into(),
+        REMOTE_NAME.into(), "sftp".into(),
         format!("host={host}"), format!("port={port}"), format!("user={user}"),
     ]);
     match auth {
@@ -276,12 +279,14 @@ mod tests {
         let args = create_sftp_args(cfg(), "nas.local", 22, "milosz",
             &SftpAuth::Password("s3cret".into()));
         let joined = args.join(" ");
-        assert!(joined.contains("config create clipsnip sftp"));
+        // --obscure is a `config create` flag, not a global one: placed before
+        // the subcommand, rclone consumes "config" as its value and fails with
+        // `unknown command "create"`.
+        assert!(joined.contains("config create --obscure clipsnip sftp"));
         assert!(joined.contains("host=nas.local"));
         assert!(joined.contains("port=22"));
         assert!(joined.contains("user=milosz"));
         assert!(joined.contains("pass=s3cret"));
-        assert!(joined.contains("--obscure"));
     }
 
     #[test]
