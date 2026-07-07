@@ -25,7 +25,7 @@ nothing to install separately.
 > have on disk — trim, mix, and export. To capture gameplay or your screen in
 > the first place, pair it with a dedicated recorder, for example:
 >
-> - **[GPU Screen Recorder](https://git.dec05eba.com/gpu-screen-recorder/about/)** (Linux) — recommended, low-overhead GPU-accelerated capture
+> - **[GPU Screen Recorder](https://git.dec05eba.com/gpu-screen-recorder/about/)** (Linux) — recommended, low-overhead GPU-accelerated capture, easy setup, multi audio channel recording
 > - **[OBS Studio](https://obsproject.com/)** (Linux/Windows/macOS) — full-featured, widely used
 > - **Steam** built-in game recording (Linux/Windows/macOS, via the Steam client)
 
