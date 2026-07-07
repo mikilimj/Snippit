@@ -16,8 +16,8 @@ import {
   needsResync,
 } from "./audioChunks";
 
-/** Decoded chunks kept per track: current, neighbours, and a little history. */
-const CACHE_CHUNKS_PER_TRACK = 4;
+/** Decoded chunks kept per track: current, neighbour, and one for history. */
+const CACHE_CHUNKS_PER_TRACK = 3;
 
 export class ChunkedAudioEngine {
   private readonly ctx: AudioContext;

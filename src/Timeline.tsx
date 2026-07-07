@@ -24,12 +24,25 @@ export function Timeline({ duration, videoRef, inPoint, outPoint, onSeek }: Prop
   // a proxy. Sub-frame changes bail out via functional setState.
   const [currentTime, setCurrentTime] = useState(0);
   useEffect(() => {
-    let raf = requestAnimationFrame(function tick() {
-      const t = videoRef.current?.currentTime ?? 0;
-      setCurrentTime(prev => (Math.abs(t - prev) < 0.03 ? prev : t));
-      raf = requestAnimationFrame(tick);
-    });
-    return () => cancelAnimationFrame(raf);
+    let raf = 0;
+    const start = () => {
+      raf = requestAnimationFrame(function tick() {
+        const t = videoRef.current?.currentTime ?? 0;
+        setCurrentTime(prev => (Math.abs(t - prev) < 0.03 ? prev : t));
+        raf = requestAnimationFrame(tick);
+      });
+    };
+    const stop = () => cancelAnimationFrame(raf);
+    // Hidden tabs/minimized windows don't need a live playhead; stopping the
+    // loop entirely (rather than relying on browser rAF throttling) avoids
+    // needless wake-ups while backgrounded.
+    const onVisibility = () => (document.hidden ? stop() : start());
+    document.addEventListener("visibilitychange", onVisibility);
+    if (!document.hidden) start();
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      stop();
+    };
   }, [videoRef]);
 
   const seekAt = useCallback((clientX: number) => {
