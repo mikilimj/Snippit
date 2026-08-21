@@ -58,8 +58,8 @@ nothing to install separately.
 Every [GitHub release](https://github.com/mikilimj/ClipSnip/releases) ships
 ready-to-run installers built by CI — no Node.js or Rust toolchain required:
 
-- **Linux:** AppImage, `.deb`, or `.rpm`
-- **Windows:** MSI or `.exe` (NSIS installer)
+- **Linux:** `.AppImage`, `.deb`, or `.rpm`
+- **Windows:** `.msi` or `.exe` (NSIS installer)
 
 Arch Linux users can install from the **AUR** instead — see
 [Arch Linux / AUR](#arch-linux--aur) below.
@@ -128,5 +128,4 @@ an HTTP server, why audio never uses `<audio>`/`<video>` elements directly).
 ## Maintainers & contributing
 
 ClipSnip is maintained by [@mikilimj](https://github.com/mikilimj). Issues and
-pull requests are welcome — please open an issue to discuss significant changes
-before submitting a PR.
+pull requests are welcome.
