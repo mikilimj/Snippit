@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
+import { join, videoDir } from "@tauri-apps/api/path";
 import {
   checkRootDirStatus,
   checkPathWritable,
@@ -38,21 +39,40 @@ export function FirstRunWizard({ onComplete }: FirstRunWizardProps) {
   const [restoreSelected, setRestoreSelected] = useState<Set<string>>(new Set());
   const [importing, setImporting] = useState(false);
 
-  async function pickRoot() {
-    const selected = await open({ directory: true, multiple: false });
-    if (typeof selected !== "string") return;
-    setRootPath(selected);
+  async function checkRootPath(path: string) {
     try {
-      const empty = await checkRootDirStatus(selected);
+      const empty = await checkRootDirStatus(path);
       setRootNonEmptyWarning(!empty);
     } catch {
       setRootNonEmptyWarning(false);
     }
     try {
-      setRootWritable(await checkPathWritable(selected));
+      setRootWritable(await checkPathWritable(path));
     } catch {
       setRootWritable(false);
     }
+  }
+
+  // Suggest <Videos>/ClipSnip as a starting point so users who don't care to
+  // browse can just hit Continue; "Choose folder" still overrides it.
+  useEffect(() => {
+    (async () => {
+      try {
+        const suggested = await join(await videoDir(), "ClipSnip");
+        setRootPath(suggested);
+        await checkRootPath(suggested);
+      } catch {
+        // No Videos dir resolvable (e.g. unset XDG_VIDEOS_DIR) — fall back to
+        // requiring a manual pick, same as before this default existed.
+      }
+    })();
+  }, []);
+
+  async function pickRoot() {
+    const selected = await open({ directory: true, multiple: false });
+    if (typeof selected !== "string") return;
+    setRootPath(selected);
+    await checkRootPath(selected);
   }
 
   async function pickSourceFolder() {
