@@ -53,6 +53,19 @@ nothing to install separately.
 
 ## Getting started
 
+### Prebuilt packages (recommended for most users)
+
+Every [GitHub release](https://github.com/mikilimj/ClipSnip/releases) ships
+ready-to-run installers built by CI — no Node.js or Rust toolchain required:
+
+- **Linux:** AppImage, `.deb`, or `.rpm`
+- **Windows:** MSI or `.exe` (NSIS installer)
+
+Arch Linux users can install from the **AUR** instead — see
+[Arch Linux / AUR](#arch-linux--aur) below.
+
+### Building from source
+
 **Requirements:** [Node.js](https://nodejs.org/) and the [Rust toolchain](https://rustup.rs/)
 (`cargo`).
 
@@ -68,8 +81,8 @@ Run in development mode (hot reload for both the React frontend and Rust backend
 npm run tauri dev
 ```
 
-Build a production binary + platform installer (AppImage/`.deb` on Linux, MSI on
-Windows) under `src-tauri/target/release/bundle/`:
+Build a production binary + platform installer (AppImage/`.deb`/`.rpm` on Linux,
+MSI/`.exe` on Windows) under `src-tauri/target/release/bundle/`:
 
 ```bash
 npm run tauri build
