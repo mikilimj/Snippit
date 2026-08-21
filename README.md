@@ -81,8 +81,8 @@ Run in development mode (hot reload for both the React frontend and Rust backend
 npm run tauri dev
 ```
 
-Build a production binary + platform installer (AppImage/`.deb`/`.rpm` on Linux,
-MSI/`.exe` on Windows) under `src-tauri/target/release/bundle/`:
+Build a production binary + platform installer (`.AppImage`/`.deb`/`.rpm` on Linux,
+`.MSI`/`.exe` on Windows) under `src-tauri/target/release/bundle/`:
 
 ```bash
 npm run tauri build
