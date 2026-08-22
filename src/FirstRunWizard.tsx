@@ -53,7 +53,7 @@ export function FirstRunWizard({ onComplete }: FirstRunWizardProps) {
     }
   }
 
-  // Suggest <Videos>/ClipSnip as a starting point so users who don't care to
+  // Suggest <Videos>/Snippit as a starting point so users who don't care to
   // browse can just hit Continue; "Choose folder" still overrides it.
   useEffect(() => {
     (async () => {
