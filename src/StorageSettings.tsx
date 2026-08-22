@@ -189,7 +189,7 @@ export function StorageConnectForm({ onConnected }: { onConnected: () => void })
               type="text"
               value={oauthBasePath}
               onChange={e => setOauthBasePath(e.target.value)}
-              placeholder="/ClipSnip"
+              placeholder="/Snippit"
             />
           </label>
           <div className="settings-actions">

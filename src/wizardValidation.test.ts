@@ -6,7 +6,7 @@ describe("canContinueFromRootStep", () => {
     expect(canContinueFromRootStep(null)).toBe(false);
   });
   it("is true once a root path is chosen", () => {
-    expect(canContinueFromRootStep("/home/user/ClipSnip")).toBe(true);
+    expect(canContinueFromRootStep("/home/user/Snippit")).toBe(true);
   });
 });
 
