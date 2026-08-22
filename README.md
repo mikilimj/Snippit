@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="logo.png" alt="ClipSnip logo" width="96" height="96">
+  <img src="logo.png" alt="Snippit logo" width="96" height="96">
 </p>
 
-<h1 align="center">ClipSnip</h1>
+<h1 align="center">Snippit</h1>
 
 <p align="center">
   A fast desktop clip-trimming tool with live multi-track audio mixing,<br>
@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/mikilimj/ClipSnip/actions/workflows/build.yml"><img src="https://img.shields.io/github/actions/workflow/status/mikilimj/ClipSnip/build.yml" alt="Build status"></a>
+  <a href="https://github.com/mikilimj/Snippit/actions/workflows/build.yml"><img src="https://img.shields.io/github/actions/workflow/status/mikilimj/Snippit/build.yml" alt="Build status"></a>
   <img src="https://img.shields.io/badge/version-1.2.0-blue" alt="Version">
   <img src="https://img.shields.io/badge/platforms-Linux%20%7C%20Windows-lightgrey" alt="Platforms">
 </p>
@@ -21,7 +21,7 @@ common case. `ffmpeg`, `ffprobe`, and `rclone` ship as sidecar binaries, so ther
 nothing to install separately.
 
 > [!IMPORTANT]
-> **ClipSnip does not record anything.** It's an editor for clips you already
+> **Snippit does not record anything.** It's an editor for clips you already
 > have on disk — trim, mix, and export. To capture gameplay or your screen in
 > the first place, pair it with a dedicated recorder, for example:
 >
@@ -55,7 +55,7 @@ nothing to install separately.
 
 ### Prebuilt packages (recommended for most users)
 
-Every [GitHub release](https://github.com/mikilimj/ClipSnip/releases) ships
+Every [GitHub release](https://github.com/mikilimj/Snippit/releases) ships
 ready-to-run installers built by CI — no Node.js or Rust toolchain required:
 
 - **Linux:** `.AppImage`, `.deb`, or `.rpm`
@@ -70,8 +70,8 @@ Arch Linux users can install from the **AUR** instead — see
 (`cargo`).
 
 ```bash
-git clone https://github.com/mikilimj/ClipSnip.git
-cd ClipSnip
+git clone https://github.com/mikilimj/Snippit.git
+cd Snippit
 npm install
 ```
 
@@ -91,13 +91,13 @@ npm run tauri build
 Once built, launch the binary directly without going through npm, e.g. on Linux:
 
 ```bash
-./src-tauri/target/release/clipsnip
+./src-tauri/target/release/snippit
 ```
 
 ### Arch Linux / AUR
 
 Package definitions are available under [`packaging/aur/`](packaging/aur/):
-`clipsnip` (builds from source) and `clipsnip-bin` (prebuilt `.deb` repackaged).
+`snippit` (builds from source) and `snippit-bin` (prebuilt `.deb` repackaged).
 
 ### Running the tests
 
@@ -119,7 +119,7 @@ an HTTP server, why audio never uses `<audio>`/`<video>` elements directly).
 
 ## Getting help
 
-- **Bugs and feature requests:** open a [GitHub issue](https://github.com/mikilimj/ClipSnip/issues).
+- **Bugs and feature requests:** open a [GitHub issue](https://github.com/mikilimj/Snippit/issues).
 - **Design background:** the `docs/superpowers/` folder holds the specs and
   plans written while building major features (first-run setup, resizable
   panels, GPU export, storage sync), useful context if you're digging into why
@@ -127,5 +127,5 @@ an HTTP server, why audio never uses `<audio>`/`<video>` elements directly).
 
 ## Maintainers & contributing
 
-ClipSnip is maintained by [@mikilimj](https://github.com/mikilimj). Issues and
+Snippit is maintained by [@mikilimj](https://github.com/mikilimj). Issues and
 pull requests are welcome.
