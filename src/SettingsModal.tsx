@@ -98,7 +98,7 @@ export function SettingsModal({
   }, []);
 
   async function doExport() {
-    const dest = await save({ defaultPath: "clipsnip-library.zip" });
+    const dest = await save({ defaultPath: "snippit-library.zip" });
     if (!dest) return;
     setBundling(true);
     setBundleProgress({ fraction: 0, phase: "Bundling…" });

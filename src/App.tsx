@@ -68,14 +68,14 @@ function App() {
     defaultSize: 224,
     min: 184,
     max: 480,
-    storageKey: "clipsnip:sidebarWidth",
+    storageKey: "snippit:sidebarWidth",
   });
   const videoHeight = useResizable({
     axis: "y",
     defaultSize: 50,
     min: 25,
     max: 85,
-    storageKey: "clipsnip:videoMaxHeightVh",
+    storageKey: "snippit:videoMaxHeightVh",
   });
   // `undefined` = still checking, `null` = needs first-run setup, string = configured root
   const [appRoot, setAppRoot] = useState<string | null | undefined>(undefined);
@@ -842,7 +842,7 @@ function App() {
       <aside className="library-panel" style={{ width: sidebar.size }}>
         <div className="brand-row">
           <img className="brand-logo" src={logo} alt="" />
-          <span className="brand-name">ClipSnip</span>
+          <span className="brand-name">Snippit</span>
         </div>
         <div className="library-header">
           <span className="library-title">Library</span>
@@ -1068,7 +1068,7 @@ function App() {
             <div className="aurora-blob aurora-blob-3" />
             <div className="empty-card">
               <img className="empty-logo" src={logo} alt="" />
-              <h1>ClipSnip</h1>
+              <h1>Snippit</h1>
               <p>Open a clip, trim it, share it — in seconds.</p>
               <button className="btn-export" onClick={pickClip}>Open a clip</button>
             </div>
