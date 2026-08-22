@@ -20,7 +20,7 @@ fn generate_tone_m4a(path: &str, secs: u32) {
 
 fn decode_chunk(src: &str, start: f64, dur: f64) -> Vec<u8> {
     let out_path = std::env::temp_dir().join(format!(
-        "clipsnip_test_chunk_{}_{start}_{dur}.wav",
+        "snippit_test_chunk_{}_{start}_{dur}.wav",
         std::process::id()
     ));
     let out_s = out_path.to_str().unwrap();
@@ -57,7 +57,7 @@ fn wav_payload(wav: &[u8]) -> &[u8] {
 #[test]
 fn audio_chunk_decodes_patchable_wav_of_expected_duration() {
     let dir = std::env::temp_dir();
-    let src = dir.join("clipsnip_chunk_src.m4a");
+    let src = dir.join("snippit_chunk_src.m4a");
     let src_s = src.to_str().unwrap();
     generate_tone_m4a(src_s, 8);
 
@@ -87,7 +87,7 @@ fn audio_chunk_decodes_patchable_wav_of_expected_duration() {
 #[test]
 fn adjacent_audio_chunks_join_gaplessly() {
     let dir = std::env::temp_dir();
-    let src = dir.join("clipsnip_gapless_src.m4a");
+    let src = dir.join("snippit_gapless_src.m4a");
     let src_s = src.to_str().unwrap();
     generate_tone_m4a(src_s, 8);
 
@@ -122,8 +122,8 @@ fn adjacent_audio_chunks_join_gaplessly() {
 #[test]
 fn video_only_remux_strips_all_audio_streams() {
     let dir = std::env::temp_dir();
-    let src = dir.join("clipsnip_vo_src.mp4");
-    let out = dir.join("clipsnip_vo_out.mp4");
+    let src = dir.join("snippit_vo_src.mp4");
+    let out = dir.join("snippit_vo_out.mp4");
     let src_s = src.to_str().unwrap();
     let out_s = out.to_str().unwrap();
     let _ = std::fs::remove_file(&out);

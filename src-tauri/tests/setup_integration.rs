@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 fn unique_dir(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!(
-        "clipsnip_setup_it_{name}_{}",
+        "snippit_setup_it_{name}_{}",
         std::process::id()
     ));
     let _ = fs::remove_dir_all(&dir);

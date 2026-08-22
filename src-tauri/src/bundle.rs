@@ -160,7 +160,7 @@ mod tests {
 
     #[test]
     fn write_then_read_bundle_round_trips_files() {
-        let dir = std::env::temp_dir().join(format!("clipsnip_bundle_{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("snippit_bundle_{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         let db = dir.join("library.db");
@@ -191,7 +191,7 @@ mod tests {
 
     #[test]
     fn write_bundle_cancel_removes_partial_zip() {
-        let dir = std::env::temp_dir().join(format!("clipsnip_bundle_cancel_{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("snippit_bundle_cancel_{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         let db = dir.join("library.db");
