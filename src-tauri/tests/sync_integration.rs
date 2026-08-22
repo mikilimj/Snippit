@@ -26,19 +26,19 @@ fn run(args: &[String]) -> (bool, String) {
 
 #[test]
 fn upload_list_download_delete_roundtrip_on_local_remote() {
-    let tmp = std::env::temp_dir().join(format!("clipsnip_sync_it_{}", std::process::id()));
+    let tmp = std::env::temp_dir().join(format!("snippit_sync_it_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&tmp);
     std::fs::create_dir_all(tmp.join("store")).unwrap();
     let conf = tmp.join("rclone.conf");
 
-    // create the `clipsnip` remote as a local backend rooted anywhere;
+    // create the `snippit` remote as a local backend rooted anywhere;
     // remote paths below are absolute into our store dir
     let mut create = snippit_lib::remote::base_args(&conf);
-    create.extend(["config".into(), "create".into(), "clipsnip".into(), "local".into()]);
+    create.extend(["config".into(), "create".into(), "snippit".into(), "local".into()]);
     assert!(run(&create).0, "config create failed");
 
     let store = tmp.join("store").to_string_lossy().to_string();
-    let dir = format!("clipsnip:{store}/ClipSnip/Clips");
+    let dir = format!("snippit:{store}/Snippit/Clips");
     assert!(run(&snippit_lib::remote::mkdir_args(&conf, &dir)).0);
 
     let local = tmp.join("a.mp4");

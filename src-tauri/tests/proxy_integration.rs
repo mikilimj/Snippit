@@ -7,8 +7,8 @@ use snippit_lib::media::build_proxy_args;
 #[test]
 fn builds_a_playable_720p_h264_proxy() {
     let dir = std::env::temp_dir();
-    let src = dir.join("clipsnip_proxy_src.mp4");
-    let out = dir.join("clipsnip_proxy_out.mp4");
+    let src = dir.join("snippit_proxy_src.mp4");
+    let out = dir.join("snippit_proxy_out.mp4");
     let src_s = src.to_str().unwrap();
     let out_s = out.to_str().unwrap();
     let _ = std::fs::remove_file(&out);

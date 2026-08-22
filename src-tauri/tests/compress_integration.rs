@@ -7,9 +7,9 @@ use snippit_lib::export::{
 #[test]
 fn two_pass_compress_lands_at_or_under_the_target_size() {
     let dir = std::env::temp_dir();
-    let src = dir.join("clipsnip_compress_src.mp4");
-    let dst = dir.join("clipsnip_compress_dst.mp4");
-    let passlog = dir.join("clipsnip_compress_passlog");
+    let src = dir.join("snippit_compress_src.mp4");
+    let dst = dir.join("snippit_compress_dst.mp4");
+    let passlog = dir.join("snippit_compress_passlog");
     let src_s = src.to_str().unwrap();
     let dst_s = dst.to_str().unwrap();
     let passlog_s = passlog.to_str().unwrap();
@@ -53,6 +53,6 @@ fn two_pass_compress_lands_at_or_under_the_target_size() {
 
     let _ = std::fs::remove_file(&src);
     let _ = std::fs::remove_file(&dst);
-    let _ = std::fs::remove_file(dir.join("clipsnip_compress_passlog-0.log"));
-    let _ = std::fs::remove_file(dir.join("clipsnip_compress_passlog-0.log.mbtree"));
+    let _ = std::fs::remove_file(dir.join("snippit_compress_passlog-0.log"));
+    let _ = std::fs::remove_file(dir.join("snippit_compress_passlog-0.log.mbtree"));
 }

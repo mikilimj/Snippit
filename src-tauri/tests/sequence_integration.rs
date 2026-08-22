@@ -21,10 +21,10 @@ fn gen_clip(path: &str, size: &str, freq: u32) {
 #[test]
 fn stitches_two_clips_with_looped_music() {
     let dir = std::env::temp_dir();
-    let a = dir.join("clipsnip_seq_a.mp4");
-    let b = dir.join("clipsnip_seq_b.mp4");
-    let music = dir.join("clipsnip_seq_music.m4a");
-    let out = dir.join("clipsnip_seq_out.mp4");
+    let a = dir.join("snippit_seq_a.mp4");
+    let b = dir.join("snippit_seq_b.mp4");
+    let music = dir.join("snippit_seq_music.m4a");
+    let out = dir.join("snippit_seq_out.mp4");
     let (a_s, b_s, m_s, out_s) = (
         a.to_str().unwrap(),
         b.to_str().unwrap(),
@@ -89,8 +89,8 @@ fn stitches_two_clips_with_looped_music() {
 #[test]
 fn sequence_mixes_all_enabled_audio_tracks_of_a_segment() {
     let dir = std::env::temp_dir();
-    let src = dir.join("clipsnip_seq_multitrack_src.mkv");
-    let out = dir.join("clipsnip_seq_multitrack_out.mp4");
+    let src = dir.join("snippit_seq_multitrack_src.mkv");
+    let out = dir.join("snippit_seq_multitrack_out.mp4");
     let (src_s, out_s) = (src.to_str().unwrap(), out.to_str().unwrap());
     let _ = std::fs::remove_file(&out);
 

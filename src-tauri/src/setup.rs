@@ -118,7 +118,7 @@ pub fn is_writable(path: &Path) -> bool {
     if fs::create_dir_all(path).is_err() {
         return false;
     }
-    let probe = path.join(".clipsnip_write_test");
+    let probe = path.join(".snippit_write_test");
     match fs::write(&probe, b"") {
         Ok(_) => {
             let _ = fs::remove_file(&probe);
@@ -210,7 +210,7 @@ mod tests {
 
     fn temp_subdir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "clipsnip_setup_test_{name}_{}",
+            "snippit_setup_test_{name}_{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&dir);

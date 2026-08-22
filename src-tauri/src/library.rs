@@ -847,7 +847,7 @@ mod tests {
         let folder = create_folder(&src, "Best").unwrap();
         add_clip_to_folder(&src, a.id, folder.id).unwrap();
 
-        let dir = std::env::temp_dir().join(format!("clipsnip_expidx_{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("snippit_expidx_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let dest_db = dir.join("bundle.db");
@@ -871,7 +871,7 @@ mod tests {
 
     #[test]
     fn import_index_merges_reroots_and_flags_missing() {
-        let dir = std::env::temp_dir().join(format!("clipsnip_impidx_{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("snippit_impidx_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         // One real file (found) and one that won't exist (missing) under the new root.
