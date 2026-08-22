@@ -1,6 +1,6 @@
 use std::process::Command;
 
-use clipsnip_lib::export::{
+use snippit_lib::export::{
     build_compress_pass_args, compute_target_bitrates, ExportDevice, TrackConfig,
 };
 

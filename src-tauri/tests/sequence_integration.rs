@@ -1,6 +1,6 @@
 use std::process::Command;
 
-use clipsnip_lib::export::{build_sequence_args, ExportDevice, MusicOverlay, Segment, TrackConfig};
+use snippit_lib::export::{build_sequence_args, ExportDevice, MusicOverlay, Segment, TrackConfig};
 
 fn gen_clip(path: &str, size: &str, freq: u32) {
     let ok = Command::new("ffmpeg")
