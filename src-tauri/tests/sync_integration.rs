@@ -5,7 +5,14 @@ use std::path::PathBuf;
 use std::process::Command;
 
 fn rclone_bin() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("binaries/rclone-x86_64-unknown-linux-gnu")
+    let (suffix, ext) = match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("linux", "x86_64") => ("x86_64-unknown-linux-gnu", ""),
+        ("windows", "x86_64") => ("x86_64-pc-windows-msvc", ".exe"),
+        ("macos", "aarch64") => ("aarch64-apple-darwin", ""),
+        ("macos", "x86_64") => ("x86_64-apple-darwin", ""),
+        (os, arch) => panic!("no bundled rclone sidecar known for {os}/{arch}"),
+    };
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!("binaries/rclone-{suffix}{ext}"))
 }
 
 fn run(args: &[String]) -> (bool, String) {
