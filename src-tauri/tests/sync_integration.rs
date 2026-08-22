@@ -33,37 +33,37 @@ fn upload_list_download_delete_roundtrip_on_local_remote() {
 
     // create the `clipsnip` remote as a local backend rooted anywhere;
     // remote paths below are absolute into our store dir
-    let mut create = clipsnip_lib::remote::base_args(&conf);
+    let mut create = snippit_lib::remote::base_args(&conf);
     create.extend(["config".into(), "create".into(), "clipsnip".into(), "local".into()]);
     assert!(run(&create).0, "config create failed");
 
     let store = tmp.join("store").to_string_lossy().to_string();
     let dir = format!("clipsnip:{store}/ClipSnip/Clips");
-    assert!(run(&clipsnip_lib::remote::mkdir_args(&conf, &dir)).0);
+    assert!(run(&snippit_lib::remote::mkdir_args(&conf, &dir)).0);
 
     let local = tmp.join("a.mp4");
     std::fs::write(&local, b"fake video bytes").unwrap();
     let remote_file = format!("{dir}/sub/a.mp4");
-    let up = clipsnip_lib::remote::copyto_args(&conf, &local.to_string_lossy(), &remote_file);
+    let up = snippit_lib::remote::copyto_args(&conf, &local.to_string_lossy(), &remote_file);
     assert!(run(&up).0, "upload failed");
     // idempotent re-upload
     assert!(run(&up).0, "re-upload failed");
 
-    let (ok, json) = run(&clipsnip_lib::remote::lsjson_args(&conf, &dir));
+    let (ok, json) = run(&snippit_lib::remote::lsjson_args(&conf, &dir));
     assert!(ok);
-    let files = clipsnip_lib::remote::parse_lsjson(&json).unwrap();
+    let files = snippit_lib::remote::parse_lsjson(&json).unwrap();
     assert_eq!(files.len(), 1);
     assert_eq!(files[0].path, "sub/a.mp4");
     assert_eq!(files[0].size, 16);
 
     let back = tmp.join("back.mp4");
-    assert!(run(&clipsnip_lib::remote::download_args(&conf, &remote_file, &back.to_string_lossy())).0);
+    assert!(run(&snippit_lib::remote::download_args(&conf, &remote_file, &back.to_string_lossy())).0);
     assert_eq!(std::fs::read(&back).unwrap(), b"fake video bytes");
 
-    assert!(run(&clipsnip_lib::remote::deletefile_args(&conf, &remote_file)).0);
-    let (ok, json) = run(&clipsnip_lib::remote::lsjson_args(&conf, &dir));
+    assert!(run(&snippit_lib::remote::deletefile_args(&conf, &remote_file)).0);
+    let (ok, json) = run(&snippit_lib::remote::lsjson_args(&conf, &dir));
     assert!(ok);
-    assert!(clipsnip_lib::remote::parse_lsjson(&json).unwrap().is_empty());
+    assert!(snippit_lib::remote::parse_lsjson(&json).unwrap().is_empty());
 
     let _ = std::fs::remove_dir_all(&tmp);
 }

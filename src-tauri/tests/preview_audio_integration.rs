@@ -1,6 +1,6 @@
 use std::process::Command;
 
-use clipsnip_lib::media::{build_audio_chunk_args, build_video_only_args, patch_wav_sizes};
+use snippit_lib::media::{build_audio_chunk_args, build_video_only_args, patch_wav_sizes};
 
 /// Generates the same kind of file `prepare_audio_tracks` produces: an AAC
 /// m4a with a known sine tone.

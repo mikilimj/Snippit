@@ -6,7 +6,7 @@
 
 use std::process::Command;
 
-use clipsnip_lib::export::{
+use snippit_lib::export::{
     build_sequence_args, build_trim_compatible_args, ExportDevice, MusicOverlay, Segment,
     SequenceTarget, TrackConfig,
 };

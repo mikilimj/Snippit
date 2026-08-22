@@ -1,4 +1,4 @@
-use clipsnip_lib::setup::complete_setup_at;
+use snippit_lib::setup::complete_setup_at;
 use std::fs;
 use std::path::PathBuf;
 

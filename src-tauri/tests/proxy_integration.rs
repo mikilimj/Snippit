@@ -1,6 +1,6 @@
 use std::process::Command;
 
-use clipsnip_lib::media::build_proxy_args;
+use snippit_lib::media::build_proxy_args;
 
 /// Builds a real proxy from a 1080p source and verifies ffprobe sees a 720p
 /// H.264 stream — the format the WebView can always decode (spec §4.4).

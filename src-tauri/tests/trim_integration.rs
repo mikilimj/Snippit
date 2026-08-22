@@ -1,6 +1,6 @@
 use std::process::Command;
 
-use clipsnip_lib::export::build_trim_copy_args;
+use snippit_lib::export::build_trim_copy_args;
 
 fn probe_duration(path: &str) -> f64 {
     let out = Command::new("ffprobe")

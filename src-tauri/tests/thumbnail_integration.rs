@@ -1,6 +1,6 @@
 use std::process::Command;
 
-use clipsnip_lib::media::build_thumbnail_args;
+use snippit_lib::media::build_thumbnail_args;
 
 #[test]
 fn generates_a_real_jpeg_thumbnail_from_a_clip() {
