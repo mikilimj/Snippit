@@ -194,6 +194,12 @@ jobs:
           pkgbuild: packaging/aur/snippit/PKGBUILD
           assets: packaging/aur/snippit/snippit.desktop
           updpkgsums: true
+          # updpkgsums downloads the release source tarball into the repo
+          # working directory to compute its checksum; since `assets` is set
+          # above, the action commits with `git add --all` and would sweep
+          # that tarball in too, exceeding the AUR git hook's ~488KiB blob
+          # size limit and getting the push rejected. Drop it before commit.
+          post_process: rm -f *.tar.gz
           commit_username: mikilimj
           commit_email: milosz@medportal.pl
           ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
