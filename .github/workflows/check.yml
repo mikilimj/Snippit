@@ -32,18 +32,31 @@ jobs:
       - name: Classify changed files
         id: changes
         env:
-          COMMITS: ${{ toJson(github.event.commits) }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
         run: |
           set -euo pipefail
-          # Push events list every added/modified/removed path in the payload, so
-          # no history walk is needed. Payloads that can't be trusted — an empty
-          # one (workflow_dispatch) or a 20+ commit push, which GitHub truncates —
-          # fall back to "everything changed" instead of silently skipping checks.
-          files=$(jq -r 'if length == 0 or length >= 20 then empty
-                          else .[] | (.added + .modified + .removed)[] end' <<< "$COMMITS" | sort -u)
+          files=""
+          # Compare API rather than a history clone: ~1s instead of ~10s. Neither
+          # alternative works — the push payload in github.event.commits carries no
+          # added/modified/removed lists, and GitHub refuses to fetch a bare sha.
+          # No usable "before" (new branch, workflow_dispatch) or an answer at the
+          # API's 300-file cap falls back to "everything changed", so a wrong guess
+          # costs a slow run rather than a skipped check.
+          if [ -n "${BEFORE:-}" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ]; then
+            curl -sS --max-time 20 -H "Authorization: Bearer $GH_TOKEN" \
+                 -H "Accept: application/vnd.github+json" \
+                 "$GITHUB_API_URL/repos/$REPO/compare/$BEFORE...$AFTER" -o /tmp/compare.json || true
+            count=$(jq -r '(.files // []) | length' /tmp/compare.json 2>/dev/null || echo 0)
+            if [ "${count:-0}" -gt 0 ] && [ "${count:-0}" -lt 300 ]; then
+              files=$(jq -r '.files[].filename' /tmp/compare.json)
+            fi
+          fi
           if [ -z "$files" ]; then
             files=$(git ls-files)
-            echo "no usable commit payload; assuming every file changed"
+            echo "changed files not resolvable; assuming every file changed"
           fi
 
           rust=false
