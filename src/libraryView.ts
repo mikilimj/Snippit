@@ -40,3 +40,41 @@ export function applyFavorite(
 export function applyRename(clips: ClipRow[], id: number, name: string): ClipRow[] {
   return clips.map(c => (c.id === id ? { ...c, displayName: name } : c));
 }
+
+/**
+ * Orders clips newest-captured first, mirroring the backend's
+ * `ORDER BY effective_captured_at DESC, id DESC`. The backend already returns
+ * rows in this order; this exists for lists mutated on the client (a clip just
+ * ingested or opened), which must not break the ordering.
+ */
+export function sortByCapture(clips: ClipRow[]): ClipRow[] {
+  return [...clips].sort(
+    (a, b) => b.effectiveCapturedAt - a.effectiveCapturedAt || b.id - a.id,
+  );
+}
+
+/**
+ * Inserts `row` into `clips` (replacing any row with the same path) while
+ * preserving newest-captured-first order. Used when a newly ingested clip
+ * arrives: it is not necessarily the newest capture on disk (a recorder can
+ * drop an older file later), so simply prepending it would be wrong.
+ */
+export function upsertByCapture(clips: ClipRow[], row: ClipRow): ClipRow[] {
+  return sortByCapture([row, ...clips.filter(c => c.path !== row.path)]);
+}
+
+/**
+ * A short, locale-aware label for when a clip was captured — the date only, since
+ * the sidebar row is narrow and the time adds little when sorting is by capture
+ * date. `null` when the container carried no capture metadata at all, so the UI
+ * can stay quiet rather than showing a fallback mtime as if it were a recording
+ * date.
+ */
+export function captureLabel(row: ClipRow): string | null {
+  if (row.capturedAt === null) return null;
+  return new Date(row.capturedAt * 1000).toLocaleDateString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
+}
