@@ -95,7 +95,7 @@ jobs:
       # actions/cache cannot restore over it.
       - name: Restore apt cache
         if: steps.changes.outputs.rust == 'true'
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: .apt-cache
           key: apt-debs-${{ runner.os }}-22.04-webkit2gtk4.1-v1
