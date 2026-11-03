@@ -1,4 +1,4 @@
-mod probe;
+pub mod probe;
 pub mod bundle;
 pub mod export;
 pub mod setup;
@@ -173,7 +173,12 @@ async fn probe_path(app: &tauri::AppHandle, path: &str) -> Result<ClipMeta, Stri
     if !output.status.success() {
         return Err(String::from_utf8_lossy(&output.stderr).to_string());
     }
-    parse_ffprobe_json(&String::from_utf8_lossy(&output.stdout))
+    let mut meta = parse_ffprobe_json(&String::from_utf8_lossy(&output.stdout))?;
+    // Cheap, and the library needs it to order clips whose container carries no
+    // capture time. `file_mtime_unix` yields 0 when the stat fails; store `None`
+    // instead so an unreadable file sorts last rather than pretending to be 1970.
+    meta.file_mtime = Some(file_mtime_unix(Path::new(path))).filter(|t| *t > 0);
+    Ok(meta)
 }
 
 #[tauri::command]
