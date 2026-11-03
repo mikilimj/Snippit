@@ -139,5 +139,5 @@ an HTTP server, why audio never uses `<audio>`/`<video>` elements directly).
 
 ## Maintainers & contributing
 
-Snippit is maintained by [@mikilimj](https://github.com/mikilimj). Issues and
+Snippit is maintained by [@mikilimj](https://github.com/mikilimj) and Chatgpt, Claude, Deepseek etc.. Issues and
 pull requests are welcome.
