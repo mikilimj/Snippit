@@ -7,7 +7,8 @@ on:
   push:
   workflow_dispatch:
 
-# A newer push to the same branch makes an in-flight check obsolete.
+# A newer push to the same branch makes an in-flight check obsolete. Cancelling
+# here also stops the runner mid-apt, which is where most of the time goes.
 concurrency:
   group: check-${{ github.ref }}
   cancel-in-progress: true
@@ -16,16 +17,111 @@ permissions:
   contents: read
 
 jobs:
-  check:
+  # Cheap gate so a frontend-only push never pays for WebKitGTK + cargo, and a
+  # docs-only push costs ~10s instead of a full run.
+  changes:
+    name: Detect changed paths
     runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    outputs:
+      frontend: ${{ steps.classify.outputs.frontend }}
+      rust: ${{ steps.classify.outputs.rust }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Classify changed files
+        id: classify
+        env:
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          # workflow_dispatch, force-push or a brand-new ref has no usable base
+          # commit; treat everything as changed instead of silently skipping.
+          if [ -z "$BEFORE" ] || ! git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+            files=$(git ls-files)
+          else
+            files=$(git diff --name-only "$BEFORE" "$AFTER")
+          fi
+
+          rust=false
+          frontend=false
+          # This workflow is in both lists: editing it revalidates both halves.
+          if grep -qE '^(src-tauri/|\.github/workflows/check\.yml$)' <<< "$files"; then rust=true; fi
+          if grep -qE '^(src/|public/|index\.html$|tsconfig[^/]*\.json$|vite\.config\.(ts|js)$|package\.json$|package-lock\.json$|\.github/workflows/check\.yml$)' <<< "$files"; then frontend=true; fi
+
+          echo "rust=$rust" >> "$GITHUB_OUTPUT"
+          echo "frontend=$frontend" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "$files" | head -20 || true
+          echo "-> rust=$rust frontend=$frontend"
+
+  check:
+    name: Typecheck
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true' || needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
 
+      # ---- frontend (~10s, no system packages needed) ----
+      - name: Setup Node.js
+        if: needs.changes.outputs.frontend == 'true'
+        uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install frontend dependencies
+        if: needs.changes.outputs.frontend == 'true'
+        run: npm ci --no-audit --no-fund
+
+      # Types only: tsc --noEmit emits nothing, vite never runs.
+      - name: Typecheck frontend
+        if: needs.changes.outputs.frontend == 'true'
+        run: npx tsc --noEmit
+
+      # ---- rust (~30s warm, ~70s cold) ----
+      # webkit2gtk dev headers are the single biggest cost of this job (62s
+      # measured, almost all of it download). apt's .deb archives and package
+      # indexes are therefore cached in a workspace-local dir via apt's
+      # Dir::Cache/Dir::State overrides — /var/cache/apt is root-owned and
+      # actions/cache cannot restore over it.
+      - name: Restore apt cache
+        if: needs.changes.outputs.rust == 'true'
+        uses: actions/cache@v4
+        with:
+          path: .apt-cache
+          key: apt-debs-${{ runner.os }}-22.04-webkit2gtk4.1-v1
+
       - name: Install Linux dependencies
+        if: needs.changes.outputs.rust == 'true'
+        env:
+          DEBIAN_FRONTEND: noninteractive
+          APT_OPTS: >-
+            -o Dir::Cache::archives=${{ github.workspace }}/.apt-cache/archives
+            -o Dir::State::lists=${{ github.workspace }}/.apt-cache/lists
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+          set -euo pipefail
+          mkdir -p .apt-cache/archives/partial .apt-cache/lists/partial
+          packages="libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev"
+
+          # Indexes are cached too, so only refresh them on a cold cache.
+          if [ -z "$(ls -A .apt-cache/lists)" ]; then
+            sudo apt-get $APT_OPTS -qq update
+          fi
+
+          # --no-download installs straight from the cached .debs; a stale index
+          # or a missing package falls through to the normal networked install.
+          sudo apt-get $APT_OPTS install -y --no-download $packages \
+            || { sudo apt-get $APT_OPTS -qq update; sudo apt-get $APT_OPTS install -y $packages; }
+
+          # Hand the cache back to the runner user so the post-step can save it.
+          sudo chown -R "$(id -u):$(id -g)" .apt-cache
 
       # src-tauri/binaries/ is gitignored and tauri-build fails compilation while
       # tauri.conf.json's externalBin entries are missing ("resource path ...
@@ -33,6 +129,7 @@ jobs:
       # executed — tauri-build only checks the paths exist, so empty files keep the
       # check fast instead of pulling ~150 MB of ffmpeg/rclone on every push.
       - name: Stub sidecar binaries
+        if: needs.changes.outputs.rust == 'true'
         run: |
           mkdir -p src-tauri/binaries
           touch src-tauri/binaries/ffmpeg-x86_64-unknown-linux-gnu \
@@ -40,27 +137,20 @@ jobs:
                 src-tauri/binaries/rclone-x86_64-unknown-linux-gnu
 
       - name: Install Rust
+        if: needs.changes.outputs.rust == 'true'
         uses: dtolnay/rust-toolchain@stable
 
       - name: Rust cache
+        if: needs.changes.outputs.rust == 'true'
         uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v5
-        with:
-          node-version: 20
-          cache: npm
-
-      - name: Install frontend dependencies
-        run: npm ci
-
-      # Types only: tsc --noEmit emits nothing, vite never runs.
-      - name: Typecheck frontend
-        run: npx tsc --noEmit
+          # Only main writes the cache; branches restore it read-only so feature
+          # work can't thrash the shared entry with one-off artifacts.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # cargo check type-checks the crate and every target (lib, bin, tests)
       # without producing a binary or running beforeBuildCommand.
       - name: Typecheck Rust
+        if: needs.changes.outputs.rust == 'true'
         run: cargo check --locked --all-targets --manifest-path src-tauri/Cargo.toml
