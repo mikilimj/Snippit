@@ -2,7 +2,7 @@
 # pkgver is bumped automatically by .github/workflows/build.yml on each
 # GitHub release; checksums are refreshed there with updpkgsums.
 pkgname=snippit-bin
-pkgver=1.2.0
+pkgver=1.2.2
 pkgrel=1
 pkgdesc="Desktop clip-trimming tool with live multi-track audio mixing and lossless export (prebuilt binary)"
 arch=('x86_64')
@@ -13,7 +13,7 @@ depends=('webkit2gtk-4.1' 'gtk3' 'libayatana-appindicator' 'ffmpeg' 'rclone'
 provides=('snippit')
 conflicts=('snippit')
 source=("$url/releases/download/v$pkgver/Snippit_${pkgver}_amd64.deb")
-sha256sums=('SKIP')
+sha256sums=('c1ebc40351524e0000749c463d3e3c547c7b17c2deecf0f1daa370a1cd43996b')
 
 package() {
   # makepkg has already unpacked the .deb (an ar archive) into $srcdir;
