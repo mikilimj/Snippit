@@ -4,7 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { probeClip, exportTrim, exportCompressed, cancelExport, prepareAudioTracks, prepareVideoOnly, getAppRoot, addToLibrary, listLibrary, removeFromLibrary, rescanLibrary, setClipFavorite, renameLibraryClip, createFolder, listFolders, deleteFolder, addClipToFolder, removeClipFromFolder, listClipsInFolder, listUnsortedLibrary, ensureProxy, storageStatus, storageSyncedRelNames, storageDeleteRemote, type ClipMeta, type ClipRow, type ExportMode, type ExportProgress, type Folder, type TrackConfig, type SetupResult } from "./api";
 import { exportSequence, type MusicOverlay } from "./api";
-import { newClipBelongsInView, applyFavorite, applyRename, type LibraryView } from "./libraryView";
+import { newClipBelongsInView, applyFavorite, applyRename, upsertByCapture, captureLabel, type LibraryView } from "./libraryView";
 import { previewPath, shouldTryProxy } from "./preview";
 import { ChunkedAudioEngine } from "./audioEngine";
 import { moveSegment, removeSegment, sequenceDuration, toBackendSegments, type SequenceSegment } from "./sequence";
@@ -32,6 +32,14 @@ function clipRelName(appRoot: string | null | undefined, path: string): string |
   const norm = path.replace(/\\/g, "/");
   const prefix = `${appRoot.replace(/\\/g, "/").replace(/\/$/, "")}/Clips/`;
   return norm.startsWith(prefix) ? norm.slice(prefix.length) : null;
+}
+
+// The capture date in a sidebar row's meta line, computed once per render. Stays
+// quiet for clips whose container carried no capture metadata: the library then
+// sorts them by file mtime, which would be the copy date, not a recording date.
+function CaptureDate({ row }: { row: ClipRow }) {
+  const label = captureLabel(row);
+  return label ? <>{label} · </> : null;
 }
 
 function App() {
@@ -72,14 +80,14 @@ function App() {
     defaultSize: 224,
     min: 184,
     max: 480,
-    storageKey: "clipsnip:sidebarWidth",
+    storageKey: "snippit:sidebarWidth",
   });
   const videoHeight = useResizable({
     axis: "y",
     defaultSize: 50,
     min: 25,
     max: 85,
-    storageKey: "clipsnip:videoMaxHeightVh",
+    storageKey: "snippit:videoMaxHeightVh",
   });
   // `undefined` = still checking, `null` = needs first-run setup, string = configured root
   const [appRoot, setAppRoot] = useState<string | null | undefined>(undefined);
@@ -184,7 +192,7 @@ function App() {
     const unlisten = listen<ClipRow>("clip-added", e => {
       if (!newClipBelongsInView(activeView)) return;
       const row = e.payload;
-      setLibrary(prev => [row, ...prev.filter(x => x.path !== row.path)]);
+      setLibrary(prev => upsertByCapture(prev, row));
     });
     return () => {
       unlisten.then(f => f());
@@ -622,32 +630,34 @@ function App() {
       addToLibrary(p, m)
         .then(row => {
           if (!newClipBelongsInView(activeView)) return;
-          setLibrary(prev => [row, ...prev.filter(e => e.path !== p)]);
+          setLibrary(prev => upsertByCapture(prev, row));
         })
         .catch(err => {
           console.error("Failed to add clip to library:", err);
           if (!newClipBelongsInView(activeView)) return;
+          // In-session stand-in for the row the backend would have returned. Its
+          // sort key must match the backend's `COALESCE(captured_at, file_mtime)`
+          // so the clip lands where a reload would put it.
+          const now = Math.floor(Date.now() / 1000);
+          const fallback: ClipRow = {
+            id: -Date.now(),
+            path: p,
+            displayName: basename(p),
+            durationSecs: m.durationSecs,
+            width: m.width,
+            height: m.height,
+            container: m.container,
+            videoCodec: m.videoCodec,
+            audioTrackCount: m.audioTracks.length,
+            thumbnailPath: null,
+            favorite: false,
+            missing: false,
+            addedAt: now,
+            capturedAt: m.capturedAt,
+            effectiveCapturedAt: m.capturedAt ?? m.fileMtime ?? now,
+          };
           setLibrary(prev =>
-            prev.some(e => e.path === p)
-              ? prev
-              : [
-                  {
-                    id: -Date.now(),
-                    path: p,
-                    displayName: basename(p),
-                    durationSecs: m.durationSecs,
-                    width: m.width,
-                    height: m.height,
-                    container: m.container,
-                    videoCodec: m.videoCodec,
-                    audioTrackCount: m.audioTracks.length,
-                    thumbnailPath: null,
-                    favorite: false,
-                    missing: false,
-                    addedAt: Math.floor(Date.now() / 1000),
-                  },
-                  ...prev,
-                ]
+            prev.some(e => e.path === p) ? prev : upsertByCapture(prev, fallback),
           );
         });
 
@@ -916,7 +926,7 @@ function App() {
       <aside className="library-panel" style={{ width: sidebar.size }}>
         <div className="brand-row">
           <img className="brand-logo" src={logo} alt="" />
-          <span className="brand-name">ClipSnip</span>
+          <span className="brand-name">Snippit</span>
         </div>
         <div className="library-header">
           <span className="library-title">Library</span>
@@ -1010,6 +1020,10 @@ function App() {
                   )}
                   <span className="library-meta">
                     {entry.favorite && <span className="fav-inline">★ </span>}
+                    {/* The library sorts by capture date, so showing it makes the
+                        order legible. Clips whose container carries no capture
+                        metadata show nothing rather than a misleading mtime. */}
+                    <CaptureDate row={entry} />
                     {entry.durationSecs.toFixed(1)}s · {entry.width}×{entry.height}
                   </span>
                 </div>
@@ -1048,7 +1062,7 @@ function App() {
             <div className="aurora-blob aurora-blob-3" />
             <div className="empty-card">
               <img className="empty-logo" src={logo} alt="" />
-              <h1>ClipSnip</h1>
+              <h1>Snippit</h1>
               <p>Open a clip, trim it, share it — in seconds.</p>
               <button className="btn-export" onClick={pickClip}>Open a clip</button>
             </div>

@@ -1,6 +1,6 @@
 use std::process::Command;
 
-use clipsnip_lib::export::build_trim_copy_args;
+use snippit_lib::export::build_trim_copy_args;
 
 fn probe_duration(path: &str) -> f64 {
     let out = Command::new("ffprobe")
@@ -18,8 +18,8 @@ fn probe_duration(path: &str) -> f64 {
 #[test]
 fn trims_a_generated_clip_to_requested_span() {
     let dir = std::env::temp_dir();
-    let src = dir.join("clipsnip_src.mp4");
-    let dst = dir.join("clipsnip_dst.mp4");
+    let src = dir.join("snippit_src.mp4");
+    let dst = dir.join("snippit_dst.mp4");
     let src_s = src.to_str().unwrap();
     let dst_s = dst.to_str().unwrap();
 

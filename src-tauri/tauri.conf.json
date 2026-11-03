@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "ClipSnip",
-  "version": "1.2.1",
-  "identifier": "pl.medportal.clipsnip",
+  "productName": "Snippit",
+  "version": "1.2.2",
+  "identifier": "pl.medportal.snippit",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "ClipSnip",
+        "title": "Snippit",
         "width": 800,
         "height": 600
       }

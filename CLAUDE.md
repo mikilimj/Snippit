@@ -21,7 +21,7 @@ No lint script is configured; `tsc` (via `npm run build`) is the type-check gate
 
 ## Architecture
 
-ClipSnip is a Tauri 2 desktop app: a React/TypeScript frontend (`src/`) in a native
+Snippit is a Tauri 2 desktop app: a React/TypeScript frontend (`src/`) in a native
 window, backed by a Rust core (`src-tauri/src/`). `ffmpeg`/`ffprobe` ship as sidecar
 binaries in `src-tauri/binaries/` — no system install required.
 

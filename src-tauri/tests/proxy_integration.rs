@@ -1,14 +1,14 @@
 use std::process::Command;
 
-use clipsnip_lib::media::build_proxy_args;
+use snippit_lib::media::build_proxy_args;
 
 /// Builds a real proxy from a 1080p source and verifies ffprobe sees a 720p
 /// H.264 stream — the format the WebView can always decode (spec §4.4).
 #[test]
 fn builds_a_playable_720p_h264_proxy() {
     let dir = std::env::temp_dir();
-    let src = dir.join("clipsnip_proxy_src.mp4");
-    let out = dir.join("clipsnip_proxy_out.mp4");
+    let src = dir.join("snippit_proxy_src.mp4");
+    let out = dir.join("snippit_proxy_out.mp4");
     let src_s = src.to_str().unwrap();
     let out_s = out.to_str().unwrap();
     let _ = std::fs::remove_file(&out);

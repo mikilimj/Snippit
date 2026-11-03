@@ -6,7 +6,7 @@
 
 use std::process::Command;
 
-use clipsnip_lib::export::{
+use snippit_lib::export::{
     build_sequence_args, build_trim_compatible_args, ExportDevice, MusicOverlay, Segment,
     SequenceTarget, TrackConfig,
 };
@@ -50,8 +50,8 @@ fn assert_h264_output(path: &str) {
 #[ignore]
 fn vaapi_compatible_trim_with_amix_encodes() {
     let dir = std::env::temp_dir();
-    let src = dir.join("clipsnip_vaapi_trim_src.mp4");
-    let out = dir.join("clipsnip_vaapi_trim_out.mp4");
+    let src = dir.join("snippit_vaapi_trim_src.mp4");
+    let out = dir.join("snippit_vaapi_trim_out.mp4");
     let (src_s, out_s) = (src.to_str().unwrap(), out.to_str().unwrap());
     gen_two_track_clip(src_s);
     let _ = std::fs::remove_file(&out);
@@ -80,9 +80,9 @@ fn vaapi_compatible_trim_with_amix_encodes() {
 #[ignore]
 fn vaapi_sequence_with_target_size_encodes() {
     let dir = std::env::temp_dir();
-    let src = dir.join("clipsnip_vaapi_seq_src.mp4");
-    let music = dir.join("clipsnip_vaapi_seq_music.m4a");
-    let out = dir.join("clipsnip_vaapi_seq_out.mp4");
+    let src = dir.join("snippit_vaapi_seq_src.mp4");
+    let music = dir.join("snippit_vaapi_seq_music.m4a");
+    let out = dir.join("snippit_vaapi_seq_out.mp4");
     let (src_s, m_s, out_s) = (
         src.to_str().unwrap(),
         music.to_str().unwrap(),
@@ -121,7 +121,7 @@ fn vaapi_sequence_with_target_size_encodes() {
         video_kbps: 800,
         audio_kbps: 128,
         pass: 2, // GPU: single pass
-        passlog: dir.join("clipsnip_vaapi_seq_passlog").to_string_lossy().into_owned(),
+        passlog: dir.join("snippit_vaapi_seq_passlog").to_string_lossy().into_owned(),
     };
     let args = build_sequence_args(
         &segments, 640, 360, Some(&overlay), out_s, &ExportDevice::Vaapi, Some(&target),

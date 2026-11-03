@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="logo.png" alt="ClipSnip logo" width="96" height="96">
+  <img src="logo.png" alt="Snippit logo" width="96" height="96">
 </p>
 
-<h1 align="center">ClipSnip</h1>
+<h1 align="center">Snippit</h1>
 
 <p align="center">
   A fast desktop clip-trimming tool with live multi-track audio mixing,<br>
@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/mikilimj/ClipSnip/actions/workflows/build.yml"><img src="https://img.shields.io/github/actions/workflow/status/mikilimj/ClipSnip/build.yml" alt="Build status"></a>
+  <a href="https://github.com/mikilimj/Snippit/actions/workflows/build.yml"><img src="https://img.shields.io/github/actions/workflow/status/mikilimj/Snippit/build.yml" alt="Build status"></a>
   <img src="https://img.shields.io/badge/version-1.2.0-blue" alt="Version">
   <img src="https://img.shields.io/badge/platforms-Linux%20%7C%20Windows-lightgrey" alt="Platforms">
 </p>
@@ -21,7 +21,7 @@ common case. `ffmpeg`, `ffprobe`, and `rclone` ship as sidecar binaries, so ther
 nothing to install separately.
 
 > [!IMPORTANT]
-> **ClipSnip does not record anything.** It's an editor for clips you already
+> **Snippit does not record anything.** It's an editor for clips you already
 > have on disk — trim, mix, and export. To capture gameplay or your screen in
 > the first place, pair it with a dedicated recorder, for example:
 >
@@ -53,12 +53,25 @@ nothing to install separately.
 
 ## Getting started
 
+### Prebuilt packages (recommended for most users)
+
+Every [GitHub release](https://github.com/mikilimj/Snippit/releases) ships
+ready-to-run installers built by CI — no Node.js or Rust toolchain required:
+
+- **Linux:** `.AppImage`, `.deb`, or `.rpm`
+- **Windows:** `.msi` or `.exe` (NSIS installer)
+
+Arch Linux users can install from the **AUR** instead — see
+[Arch Linux / AUR](#arch-linux--aur) below.
+
+### Building from source
+
 **Requirements:** [Node.js](https://nodejs.org/) and the [Rust toolchain](https://rustup.rs/)
 (`cargo`).
 
 ```bash
-git clone https://github.com/mikilimj/ClipSnip.git
-cd ClipSnip
+git clone https://github.com/mikilimj/Snippit.git
+cd Snippit
 npm install
 ```
 
@@ -68,8 +81,8 @@ Run in development mode (hot reload for both the React frontend and Rust backend
 npm run tauri dev
 ```
 
-Build a production binary + platform installer (AppImage/`.deb` on Linux, MSI on
-Windows) under `src-tauri/target/release/bundle/`:
+Build a production binary + platform installer (`.AppImage`/`.deb`/`.rpm` on Linux,
+`.MSI`/`.exe` on Windows) under `src-tauri/target/release/bundle/`:
 
 ```bash
 npm run tauri build
@@ -78,13 +91,25 @@ npm run tauri build
 Once built, launch the binary directly without going through npm, e.g. on Linux:
 
 ```bash
-./src-tauri/target/release/clipsnip
+./src-tauri/target/release/snippit
 ```
 
 ### Arch Linux / AUR
 
-Package definitions are available under [`packaging/aur/`](packaging/aur/):
-`clipsnip` (builds from source) and `clipsnip-bin` (prebuilt `.deb` repackaged).
+Snippit is available on the AUR:
+
+- [`snippit-bin`](https://aur.archlinux.org/packages/snippit-bin) — installs the prebuilt release.
+- [`snippit`](https://aur.archlinux.org/packages/snippit) — builds the release from source.
+
+Install the prebuilt package with an AUR helper such as `paru`:
+
+```bash
+paru -S snippit-bin
+```
+
+Both packages use Arch's system `ffmpeg`, `ffprobe`, and `rclone` instead of
+bundled sidecars. Package definitions are maintained under
+[`packaging/aur/`](packaging/aur/).
 
 ### Running the tests
 
@@ -106,7 +131,7 @@ an HTTP server, why audio never uses `<audio>`/`<video>` elements directly).
 
 ## Getting help
 
-- **Bugs and feature requests:** open a [GitHub issue](https://github.com/mikilimj/ClipSnip/issues).
+- **Bugs and feature requests:** open a [GitHub issue](https://github.com/mikilimj/Snippit/issues).
 - **Design background:** the `docs/superpowers/` folder holds the specs and
   plans written while building major features (first-run setup, resizable
   panels, GPU export, storage sync), useful context if you're digging into why
@@ -114,6 +139,5 @@ an HTTP server, why audio never uses `<audio>`/`<video>` elements directly).
 
 ## Maintainers & contributing
 
-ClipSnip is maintained by [@mikilimj](https://github.com/mikilimj). Issues and
-pull requests are welcome — please open an issue to discuss significant changes
-before submitting a PR.
+Snippit is maintained by [@mikilimj](https://github.com/mikilimj). Issues and
+pull requests are welcome.

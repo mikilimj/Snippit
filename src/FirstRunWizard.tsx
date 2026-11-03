@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
+import { join, videoDir } from "@tauri-apps/api/path";
 import {
   checkRootDirStatus,
   checkPathWritable,
@@ -38,21 +39,40 @@ export function FirstRunWizard({ onComplete }: FirstRunWizardProps) {
   const [restoreSelected, setRestoreSelected] = useState<Set<string>>(new Set());
   const [importing, setImporting] = useState(false);
 
-  async function pickRoot() {
-    const selected = await open({ directory: true, multiple: false });
-    if (typeof selected !== "string") return;
-    setRootPath(selected);
+  async function checkRootPath(path: string) {
     try {
-      const empty = await checkRootDirStatus(selected);
+      const empty = await checkRootDirStatus(path);
       setRootNonEmptyWarning(!empty);
     } catch {
       setRootNonEmptyWarning(false);
     }
     try {
-      setRootWritable(await checkPathWritable(selected));
+      setRootWritable(await checkPathWritable(path));
     } catch {
       setRootWritable(false);
     }
+  }
+
+  // Suggest <Videos>/Snippit as a starting point so users who don't care to
+  // browse can just hit Continue; "Choose folder" still overrides it.
+  useEffect(() => {
+    (async () => {
+      try {
+        const suggested = await join(await videoDir(), "Snippit");
+        setRootPath(suggested);
+        await checkRootPath(suggested);
+      } catch {
+        // No Videos dir resolvable (e.g. unset XDG_VIDEOS_DIR) — fall back to
+        // requiring a manual pick, same as before this default existed.
+      }
+    })();
+  }, []);
+
+  async function pickRoot() {
+    const selected = await open({ directory: true, multiple: false });
+    if (typeof selected !== "string") return;
+    setRootPath(selected);
+    await checkRootPath(selected);
   }
 
   async function pickSourceFolder() {
@@ -135,7 +155,7 @@ export function FirstRunWizard({ onComplete }: FirstRunWizardProps) {
         {step === 0 && (
           <>
             <img className="wiz-logo" src={logo} alt="" />
-            <div className="wiz-title">Welcome to ClipSnip</div>
+            <div className="wiz-title">Welcome to Snippit</div>
             <div className="wiz-desc">
               Fast trimming for your game clips. Let's set up where your clips and
               exports will live.
@@ -148,7 +168,7 @@ export function FirstRunWizard({ onComplete }: FirstRunWizardProps) {
 
         {step === 1 && (
           <>
-            <div className="wiz-title">Where should ClipSnip live?</div>
+            <div className="wiz-title">Where should Snippit live?</div>
             <div className="wiz-desc">
               Pick a folder to store your clips, exports, and settings. You can change
               this later.
@@ -159,13 +179,13 @@ export function FirstRunWizard({ onComplete }: FirstRunWizardProps) {
             </div>
             {rootNonEmptyWarning && (
               <div className="wiz-warning">
-                This folder isn't empty — ClipSnip will add Clips/Exports/Cache
+                This folder isn't empty — Snippit will add Clips/Exports/Cache
                 subfolders here.
               </div>
             )}
             {!rootWritable && (
               <div className="wiz-warning wiz-error">
-                ClipSnip can't write to this folder — choose a different one.
+                Snippit can't write to this folder — choose a different one.
               </div>
             )}
             <div className="wiz-nav">
@@ -183,7 +203,7 @@ export function FirstRunWizard({ onComplete }: FirstRunWizardProps) {
 
         {step === 2 && (
           <>
-            <div className="wiz-title">How should ClipSnip get your clips?</div>
+            <div className="wiz-title">How should Snippit get your clips?</div>
             <div className="wiz-desc">Choose one — you can change this later.</div>
             <div className="wiz-modes">
               <label className={`wiz-mode-option${mode === "import" ? " selected" : ""}`}>
@@ -195,7 +215,7 @@ export function FirstRunWizard({ onComplete }: FirstRunWizardProps) {
                 />
                 <div>
                   <div className="wiz-mode-title">Import existing clips</div>
-                  <div className="wiz-mode-desc">Copy clips from a folder into ClipSnip now.</div>
+                  <div className="wiz-mode-desc">Copy clips from a folder into Snippit now.</div>
                 </div>
               </label>
               <label className={`wiz-mode-option${mode === "empty" ? " selected" : ""}`}>

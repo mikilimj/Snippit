@@ -70,7 +70,7 @@ mod tests {
 
     fn temp_subdir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "clipsnip_watcher_test_{name}_{}",
+            "snippit_watcher_test_{name}_{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&dir);

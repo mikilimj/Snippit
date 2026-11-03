@@ -27,6 +27,13 @@ pub struct ClipRow {
     pub favorite: bool,
     pub missing: bool,
     pub added_at: i64,
+    /// Recording timestamp from the container's metadata, in Unix seconds. `None`
+    /// for files that carry none (many screen recorders and hand-rolled MP4s).
+    pub captured_at: Option<i64>,
+    /// The value the library actually sorts on: `captured_at` when known, else the
+    /// file's mtime at ingest time. Always present, so ordering never lumps every
+    /// metadata-less clip together at the bottom.
+    pub effective_captured_at: i64,
 }
 
 /// A virtual folder: a user-named grouping of clips (spec §4.2). Folders never
@@ -84,7 +91,9 @@ pub fn init_db(conn: &Connection) -> Result<(), String> {
             thumbnail_path    TEXT,
             favorite          INTEGER NOT NULL DEFAULT 0,
             missing           INTEGER NOT NULL DEFAULT 0,
-            added_at          INTEGER NOT NULL
+            added_at          INTEGER NOT NULL,
+            captured_at       INTEGER,
+            file_mtime        INTEGER
         );
         CREATE TABLE IF NOT EXISTS folders (
             id         INTEGER PRIMARY KEY,
@@ -104,11 +113,132 @@ pub fn init_db(conn: &Connection) -> Result<(), String> {
             uploaded_at INTEGER NOT NULL
         );",
     )
-    .map_err(|e| e.to_string())
+    .map_err(|e| e.to_string())?;
+    migrate_clip_columns(conn)
 }
 
+/// Adds columns introduced after a database was first created. `CREATE TABLE IF
+/// NOT EXISTS` above is a no-op on an existing file, so new columns need an
+/// explicit `ALTER TABLE`.
+///
+/// The column adds and the `file_mtime` backfill happen in ONE transaction. A
+/// half-applied migration would otherwise look finished — the columns exist, so
+/// every later `init_db` skips the guarded block and the backfill is never
+/// retried — leaving those clips ordered by `added_at` with nothing to show for
+/// it. Inside a transaction a crash rolls the schema back and the next open
+/// simply retries.
+fn migrate_clip_columns(conn: &Connection) -> Result<(), String> {
+    let existing = |name: &str| -> Result<bool, String> {
+        let mut stmt = conn
+            .prepare("SELECT name FROM pragma_table_info('clips')")
+            .map_err(|e| e.to_string())?;
+        let names = stmt
+            .query_map([], |r| r.get::<_, String>(0))
+            .map_err(|e| e.to_string())?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|e| e.to_string())?;
+        Ok(names.iter().any(|n| n == name))
+    };
+
+    let add_captured_at = !existing("captured_at")?;
+    let add_file_mtime = !existing("file_mtime")?;
+    if !add_captured_at && !add_file_mtime {
+        return ensure_capture_index(conn);
+    }
+
+    // Best-effort backfill from the files themselves: pre-migration rows have no
+    // stored mtime, and re-probing every clip on startup would be slow and would
+    // fail for missing files. A stat is cheap and good enough to order
+    // metadata-less clips; files that vanish keep NULL and sort last. Collected
+    // before the transaction so no filesystem walk happens while holding a write
+    // lock, and read before the ALTER because the column does not exist yet.
+    let backfill: Vec<(i64, i64)> = if add_file_mtime {
+        let paths: Vec<(i64, String)> = {
+            let mut stmt = conn
+                .prepare("SELECT id, path FROM clips")
+                .map_err(|e| e.to_string())?;
+            let collected = stmt
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+                .map_err(|e| e.to_string())?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(|e| e.to_string())?;
+            collected
+        };
+        paths
+            .into_iter()
+            .filter_map(|(id, path)| Some((id, file_mtime_unix(&path)?)))
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    if add_captured_at {
+        tx.execute("ALTER TABLE clips ADD COLUMN captured_at INTEGER", [])
+            .map_err(|e| e.to_string())?;
+    }
+    if add_file_mtime {
+        tx.execute("ALTER TABLE clips ADD COLUMN file_mtime INTEGER", [])
+            .map_err(|e| e.to_string())?;
+        let mut update = tx
+            .prepare("UPDATE clips SET file_mtime = ?1 WHERE id = ?2")
+            .map_err(|e| e.to_string())?;
+        for (id, mtime) in &backfill {
+            update.execute(params![mtime, id]).map_err(|e| e.to_string())?;
+        }
+    }
+    tx.commit().map_err(|e| e.to_string())?;
+    ensure_capture_index(conn)
+}
+
+/// The index behind the capture-order queries. Created after the migration adds
+/// the columns it references.
+fn ensure_capture_index(conn: &Connection) -> Result<(), String> {
+    conn.execute(
+        &format!(
+            "CREATE INDEX IF NOT EXISTS clips_captured_at
+             ON clips ({EFFECTIVE_CAPTURED_AT})"
+        ),
+        [],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// A file's mtime in Unix seconds, or `None` when it cannot be stat'd.
+fn file_mtime_unix(path: &str) -> Option<i64> {
+    std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
+}
+
+/// The columns every list query selects, in the order `row_from` reads them.
+/// Deliberately stops at `captured_at`: `select_cols()` appends the sort key so
+/// the expression lives in exactly one place.
 const SELECT_COLS: &str = "id, path, display_name, duration_secs, width, height, \
-    container, video_codec, audio_track_count, thumbnail_path, favorite, missing, added_at";
+    container, video_codec, audio_track_count, thumbnail_path, favorite, missing, added_at, \
+    captured_at";
+
+/// The sort key, shared by every list query and the supporting index. Capture
+/// time wins; a file with no capture tag falls back to its mtime, and as a last
+/// resort to when it entered the index — so the column is never NULL and the
+/// order is total.
+const EFFECTIVE_CAPTURED_AT: &str = "COALESCE(captured_at, file_mtime, added_at)";
+
+/// `SELECT_COLS` plus the sort key, which `row_from` reads as column 14.
+fn select_cols() -> String {
+    format!("{SELECT_COLS}, {EFFECTIVE_CAPTURED_AT} AS effective_captured_at")
+}
+
+/// Newest-captured first. Clips with no capture metadata fall back to `file_mtime`
+/// (the mtime the file had when it was ingested), so they still sort meaningfully
+/// against clips that do carry `creation_time`. `id DESC` breaks ties — two clips
+/// captured in the same second keep a stable, newest-index-first order.
+fn order_newest_captured() -> String {
+    format!("ORDER BY ({EFFECTIVE_CAPTURED_AT}) DESC, id DESC")
+}
 
 fn row_from(row: &rusqlite::Row) -> rusqlite::Result<ClipRow> {
     Ok(ClipRow {
@@ -125,6 +255,8 @@ fn row_from(row: &rusqlite::Row) -> rusqlite::Result<ClipRow> {
         favorite: row.get::<_, i64>(10)? != 0,
         missing: row.get::<_, i64>(11)? != 0,
         added_at: row.get(12)?,
+        captured_at: row.get(13)?,
+        effective_captured_at: row.get(14)?,
     })
 }
 
@@ -142,17 +274,22 @@ pub fn upsert_clip(
     conn.execute(
         "INSERT INTO clips
             (path, display_name, duration_secs, width, height, container,
-             video_codec, audio_track_count, thumbnail_path, favorite, missing, added_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0, 0, ?10)
+             video_codec, audio_track_count, thumbnail_path, favorite, missing, added_at,
+             captured_at, file_mtime)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0, 0, ?10, ?11, ?12)
          ON CONFLICT(path) DO UPDATE SET
-            duration_secs     = excluded.duration_secs,
-            width             = excluded.width,
-            height            = excluded.height,
-            container         = excluded.container,
-            video_codec       = excluded.video_codec,
-            audio_track_count = excluded.audio_track_count,
-            thumbnail_path    = COALESCE(excluded.thumbnail_path, clips.thumbnail_path),
-            missing           = 0",
+           duration_secs     = excluded.duration_secs,
+           width             = excluded.width,
+           height            = excluded.height,
+           container         = excluded.container,
+           video_codec       = excluded.video_codec,
+           audio_track_count = excluded.audio_track_count,
+           thumbnail_path    = COALESCE(excluded.thumbnail_path, clips.thumbnail_path),
+           -- A re-probe that finds no capture tag must not erase one we already
+           -- read; only a real value ever replaces a stored value.
+           captured_at       = COALESCE(excluded.captured_at, clips.captured_at),
+           file_mtime        = COALESCE(clips.file_mtime, excluded.file_mtime),
+           missing           = 0",
         params![
             path,
             filename_of(path),
@@ -164,22 +301,28 @@ pub fn upsert_clip(
             meta.audio_tracks.len() as i64,
             thumbnail_path,
             now_unix(),
+            meta.captured_at,
+            meta.file_mtime,
         ],
     )
     .map_err(|e| e.to_string())?;
 
     conn.query_row(
-        &format!("SELECT {SELECT_COLS} FROM clips WHERE path = ?1"),
+        &format!("SELECT {} FROM clips WHERE path = ?1", select_cols()),
         params![path],
         row_from,
     )
     .map_err(|e| e.to_string())
 }
 
-/// Lists all indexed clips, most recently added first.
+/// Lists all indexed clips, most recently captured first.
 pub fn list_clips(conn: &Connection) -> Result<Vec<ClipRow>, String> {
     let mut stmt = conn
-        .prepare(&format!("SELECT {SELECT_COLS} FROM clips ORDER BY id DESC"))
+        .prepare(&format!(
+            "SELECT {} FROM clips {}",
+            select_cols(),
+            order_newest_captured()
+        ))
         .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map([], row_from)
@@ -306,11 +449,13 @@ pub fn export_index(
         dest.execute(
             "INSERT INTO clips
                 (id, path, display_name, duration_secs, width, height, container,
-                 video_codec, audio_track_count, thumbnail_path, favorite, missing, added_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL, ?10, 0, ?11)",
+                 video_codec, audio_track_count, thumbnail_path, favorite, missing, added_at,
+                 captured_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL, ?10, 0, ?11, ?12)",
             params![
                 c.id, rel, c.display_name, c.duration_secs, c.width as i64, c.height as i64,
-                c.container, c.video_codec, c.audio_track_count as i64, c.favorite as i64, c.added_at
+                c.container, c.video_codec, c.audio_track_count as i64, c.favorite as i64, c.added_at,
+                c.captured_at
             ],
         )
         .map_err(|e| e.to_string())?;
@@ -383,12 +528,13 @@ pub fn import_index(
                 dest.execute(
                     "INSERT INTO clips
                         (path, display_name, duration_secs, width, height, container,
-                         video_codec, audio_track_count, thumbnail_path, favorite, missing, added_at)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, ?9, ?10, ?11)",
+                         video_codec, audio_track_count, thumbnail_path, favorite, missing, added_at,
+                         captured_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, ?9, ?10, ?11, ?12)",
                     params![
                         abs, c.display_name, c.duration_secs, c.width as i64, c.height as i64,
                         c.container, c.video_codec, c.audio_track_count as i64, c.favorite as i64,
-                        is_missing as i64, c.added_at
+                        is_missing as i64, c.added_at, c.captured_at
                     ],
                 )
                 .map_err(|e| e.to_string())?;
@@ -496,14 +642,16 @@ pub fn remove_clip_from_folder(
     Ok(())
 }
 
-/// Lists the clips that belong to a given folder, most recently added first.
+/// Lists the clips that belong to a given folder, most recently captured first.
 pub fn list_clips_in_folder(conn: &Connection, folder_id: i64) -> Result<Vec<ClipRow>, String> {
     let mut stmt = conn
         .prepare(&format!(
-            "SELECT {SELECT_COLS} FROM clips
+            "SELECT {} FROM clips
              JOIN clip_folders ON clip_folders.clip_id = clips.id
              WHERE clip_folders.folder_id = ?1
-             ORDER BY clips.id DESC"
+             {}",
+            select_cols(),
+            order_newest_captured()
         ))
         .map_err(|e| e.to_string())?;
     let rows = stmt
@@ -515,13 +663,15 @@ pub fn list_clips_in_folder(conn: &Connection, folder_id: i64) -> Result<Vec<Cli
 }
 
 /// Lists clips that are not in any folder — the "Unsorted" view (spec §4.2),
-/// most recently added first.
+/// most recently captured first.
 pub fn list_unsorted_clips(conn: &Connection) -> Result<Vec<ClipRow>, String> {
     let mut stmt = conn
         .prepare(&format!(
-            "SELECT {SELECT_COLS} FROM clips
+            "SELECT {} FROM clips
              WHERE id NOT IN (SELECT clip_id FROM clip_folders)
-             ORDER BY id DESC"
+             {}",
+            select_cols(),
+            order_newest_captured()
         ))
         .map_err(|e| e.to_string())?;
     let rows = stmt
@@ -621,6 +771,8 @@ mod tests {
                     language: None,
                 },
             ],
+            captured_at: None,
+            file_mtime: None,
         }
     }
 
@@ -689,8 +841,246 @@ mod tests {
         upsert_clip(&conn, "/vids/b.mp4", &sample_meta(), None).unwrap();
         let clips = list_clips(&conn).unwrap();
         assert_eq!(clips.len(), 2);
-        assert_eq!(clips[0].path, "/vids/b.mp4"); // most recently added first
+        assert_eq!(clips[0].path, "/vids/b.mp4"); // equal capture keys → id DESC tie-break
         assert_eq!(clips[1].path, "/vids/a.mp4");
+    }
+
+    /// Metadata with an explicit capture time (and mtime), for ordering tests.
+    fn meta_captured_at(captured_at: Option<i64>, file_mtime: Option<i64>) -> ClipMeta {
+        ClipMeta { captured_at, file_mtime, ..sample_meta() }
+    }
+
+    /// Reads a raw column the public `ClipRow` doesn't expose.
+    fn raw_file_mtime(conn: &Connection, path: &str) -> Option<i64> {
+        conn.query_row("SELECT file_mtime FROM clips WHERE path = ?1", params![path], |r| {
+            r.get(0)
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn list_clips_orders_by_capture_time_not_insertion_order() {
+        let conn = mem_db();
+        // Ingested in this order: newest capture first, then the oldest. Under the
+        // old `ORDER BY id DESC` the last-inserted clip led; capture order must win.
+        upsert_clip(&conn, "/vids/recent.mp4", &meta_captured_at(Some(1_700), None), None).unwrap();
+        upsert_clip(&conn, "/vids/old.mp4", &meta_captured_at(Some(100), None), None).unwrap();
+        upsert_clip(&conn, "/vids/mid.mp4", &meta_captured_at(Some(900), None), None).unwrap();
+
+        let paths: Vec<String> = list_clips(&conn).unwrap().into_iter().map(|c| c.path).collect();
+        assert_eq!(paths, ["/vids/recent.mp4", "/vids/mid.mp4", "/vids/old.mp4"]);
+    }
+
+    #[test]
+    fn clips_without_capture_metadata_fall_back_to_file_mtime() {
+        let conn = mem_db();
+        // A screen recorder that writes no `creation_time`: mtime breaks the tie
+        // against clips that do carry one, instead of sinking to the bottom.
+        upsert_clip(&conn, "/vids/tagged.mp4", &meta_captured_at(Some(500), Some(500)), None).unwrap();
+        upsert_clip(&conn, "/vids/untagged.mp4", &meta_captured_at(None, Some(800)), None).unwrap();
+        upsert_clip(&conn, "/vids/old_untagged.mp4", &meta_captured_at(None, Some(200)), None).unwrap();
+
+        let rows = list_clips(&conn).unwrap();
+        let paths: Vec<&str> = rows.iter().map(|c| c.path.as_str()).collect();
+        assert_eq!(paths, ["/vids/untagged.mp4", "/vids/tagged.mp4", "/vids/old_untagged.mp4"]);
+        // The reported sort key is always present, whatever the sources were.
+        assert_eq!(rows[0].effective_captured_at, 800);
+        assert_eq!(rows[0].captured_at, None);
+        assert_eq!(rows[1].effective_captured_at, 500);
+        assert_eq!(rows[1].captured_at, Some(500));
+    }
+
+    #[test]
+    fn clips_with_neither_capture_time_nor_mtime_still_order_deterministically() {
+        let conn = mem_db();
+        // Both fallbacks unavailable (e.g. the file vanished before the stat):
+        // `added_at` keeps the sort total rather than emitting NULLs.
+        upsert_clip(&conn, "/vids/a.mp4", &meta_captured_at(None, None), None).unwrap();
+        upsert_clip(&conn, "/vids/b.mp4", &meta_captured_at(None, None), None).unwrap();
+
+        let rows = list_clips(&conn).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().all(|r| r.effective_captured_at > 0));
+        assert_eq!(rows[0].path, "/vids/b.mp4"); // ties fall back to id DESC
+    }
+
+    #[test]
+    fn reingesting_without_a_capture_tag_keeps_the_stored_one() {
+        let conn = mem_db();
+        upsert_clip(&conn, "/vids/a.mp4", &meta_captured_at(Some(1_234), Some(9_000)), None).unwrap();
+        // A later re-probe that can't read the tags must not erase what we knew —
+        // otherwise the clip would silently jump to the top of the library.
+        let again = upsert_clip(&conn, "/vids/a.mp4", &meta_captured_at(None, Some(9_500)), None).unwrap();
+        assert_eq!(again.captured_at, Some(1_234));
+        assert_eq!(raw_file_mtime(&conn, "/vids/a.mp4"), Some(9_000));
+    }
+
+    #[test]
+    fn a_newer_capture_replaces_the_stored_one() {
+        let conn = mem_db();
+        upsert_clip(&conn, "/vids/a.mp4", &meta_captured_at(Some(1_234), None), None).unwrap();
+        let again = upsert_clip(&conn, "/vids/a.mp4", &meta_captured_at(Some(5_678), None), None).unwrap();
+        assert_eq!(again.captured_at, Some(5_678));
+    }
+
+    #[test]
+    fn folder_and_unsorted_views_share_the_capture_order() {
+        let conn = mem_db();
+        let folder = create_folder(&conn, "Game").unwrap();
+        upsert_clip(&conn, "/vids/recent.mp4", &meta_captured_at(Some(1_700), None), None).unwrap();
+        upsert_clip(&conn, "/vids/old.mp4", &meta_captured_at(Some(100), None), None).unwrap();
+        upsert_clip(&conn, "/vids/mid.mp4", &meta_captured_at(Some(900), None), None).unwrap();
+        let old = list_clips(&conn).unwrap().into_iter().find(|c| c.path == "/vids/old.mp4").unwrap();
+        add_clip_to_folder(&conn, old.id, folder.id).unwrap();
+
+        let unsorted: Vec<String> =
+            list_unsorted_clips(&conn).unwrap().into_iter().map(|c| c.path).collect();
+        assert_eq!(unsorted, ["/vids/recent.mp4", "/vids/mid.mp4"]);
+
+        let in_folder: Vec<String> = list_clips_in_folder(&conn, folder.id)
+            .unwrap()
+            .into_iter()
+            .map(|c| c.path)
+            .collect();
+        assert_eq!(in_folder, ["/vids/old.mp4"]);
+    }
+
+    #[test]
+    fn init_db_migrates_a_pre_capture_time_database() {
+        // A database created before this feature has no captured_at/file_mtime
+        // columns; init_db must add them and keep the existing rows usable.
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE clips (
+                id                INTEGER PRIMARY KEY,
+                path              TEXT NOT NULL UNIQUE,
+                display_name      TEXT NOT NULL,
+                duration_secs     REAL NOT NULL,
+                width             INTEGER NOT NULL,
+                height            INTEGER NOT NULL,
+                container         TEXT NOT NULL,
+                video_codec       TEXT NOT NULL,
+                audio_track_count INTEGER NOT NULL,
+                thumbnail_path    TEXT,
+                favorite          INTEGER NOT NULL DEFAULT 0,
+                missing           INTEGER NOT NULL DEFAULT 0,
+                added_at          INTEGER NOT NULL
+            );
+            INSERT INTO clips
+                (path, display_name, duration_secs, width, height, container,
+                 video_codec, audio_track_count, thumbnail_path, favorite, missing, added_at)
+            VALUES ('/vids/legacy.mp4', 'legacy.mp4', 5.0, 640, 480, 'mp4', 'h264', 0, NULL, 1, 0, 42);",
+        )
+        .unwrap();
+
+        init_db(&conn).unwrap(); // must migrate, not error
+        init_db(&conn).unwrap(); // and stay idempotent
+
+        let rows = list_clips(&conn).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].path, "/vids/legacy.mp4");
+        assert!(rows[0].favorite, "existing user data survives the migration");
+        assert_eq!(rows[0].captured_at, None);
+        // The file does not exist on disk, so the backfill leaves file_mtime NULL
+        // and added_at keeps the ordering total.
+        assert_eq!(raw_file_mtime(&conn, "/vids/legacy.mp4"), None);
+        assert_eq!(rows[0].effective_captured_at, 42);
+    }
+
+    /// A database with the current schema but the capture-time columns removed —
+    /// i.e. what an upgrade from the previous release actually opens.
+    fn legacy_db_with_one_clip(dir: &std::path::Path, clip: &str) -> std::path::PathBuf {
+        let db = dir.join("library.db");
+        std::fs::remove_file(&db).ok();
+        {
+            let conn = open_db(&db).unwrap();
+            conn.execute_batch(
+                "DROP INDEX clips_captured_at;
+                 ALTER TABLE clips DROP COLUMN captured_at;
+                 ALTER TABLE clips DROP COLUMN file_mtime;",
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO clips
+                    (path, display_name, duration_secs, width, height, container,
+                     video_codec, audio_track_count, thumbnail_path, favorite, missing, added_at)
+                 VALUES (?1, 'clip.mp4', 1.0, 8, 8, 'mp4', 'h264', 0, NULL, 0, 0, 42)",
+                params![clip],
+            )
+            .unwrap();
+        }
+        db
+    }
+
+    #[test]
+    fn migration_backfills_file_mtime_from_the_file_on_disk() {
+        // The fallback sort key for a metadata-less clip has to survive the
+        // upgrade, otherwise that clip silently sorts by `added_at`.
+        let dir = std::env::temp_dir().join(format!("snippit_mig_mtime_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let clip = dir.join("clip.mp4");
+        std::fs::write(&clip, b"x").unwrap();
+        let clip_str = clip.to_string_lossy().to_string();
+        let db = legacy_db_with_one_clip(&dir, &clip_str);
+
+        let conn = Connection::open(&db).unwrap();
+        init_db(&conn).unwrap();
+
+        let expected = file_mtime_unix(&clip_str).expect("the file exists");
+        assert_eq!(raw_file_mtime(&conn, &clip_str), Some(expected));
+        let rows = list_clips(&conn).unwrap();
+        assert_eq!(rows[0].captured_at, None);
+        assert_eq!(
+            rows[0].effective_captured_at, expected,
+            "ordering uses the backfilled mtime, not added_at"
+        );
+        init_db(&conn).unwrap(); // idempotent
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_failed_migration_leaves_no_half_applied_schema_and_can_be_retried() {
+        // Regression: the column adds and the backfill must commit together. If a
+        // crash could leave the columns behind without the backfill, every later
+        // init_db would skip the guarded block and those clips would keep sorting
+        // by `added_at` forever. A trigger aborts the backfill's UPDATE after both
+        // ALTERs have run, which is the worst possible moment.
+        let dir = std::env::temp_dir().join(format!("snippit_mig_atomic_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let clip = dir.join("clip.mp4");
+        std::fs::write(&clip, b"x").unwrap();
+        let clip_str = clip.to_string_lossy().to_string();
+        let db = legacy_db_with_one_clip(&dir, &clip_str);
+
+        let conn = Connection::open(&db).unwrap();
+        conn.execute_batch(
+            "CREATE TRIGGER block_updates BEFORE UPDATE ON clips
+             BEGIN SELECT RAISE(ABORT, 'blocked'); END;",
+        )
+        .unwrap();
+        let err = init_db(&conn).expect_err("the aborted backfill fails the migration");
+        assert!(err.contains("blocked"), "expected the trigger's error, got: {err}");
+
+        let columns: Vec<String> = {
+            let mut stmt = conn.prepare("SELECT name FROM pragma_table_info('clips')").unwrap();
+            stmt.query_map([], |r| r.get(0))
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap()
+        };
+        assert!(
+            !columns.iter().any(|c| c == "captured_at" || c == "file_mtime"),
+            "a failed migration must not commit the ALTERs alone: {columns:?}"
+        );
+
+        conn.execute_batch("DROP TRIGGER block_updates").unwrap();
+        init_db(&conn).unwrap(); // the retry does the whole job
+        assert_eq!(raw_file_mtime(&conn, &clip_str), file_mtime_unix(&clip_str));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -847,7 +1237,7 @@ mod tests {
         let folder = create_folder(&src, "Best").unwrap();
         add_clip_to_folder(&src, a.id, folder.id).unwrap();
 
-        let dir = std::env::temp_dir().join(format!("clipsnip_expidx_{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("snippit_expidx_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let dest_db = dir.join("bundle.db");
@@ -871,7 +1261,7 @@ mod tests {
 
     #[test]
     fn import_index_merges_reroots_and_flags_missing() {
-        let dir = std::env::temp_dir().join(format!("clipsnip_impidx_{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("snippit_impidx_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         // One real file (found) and one that won't exist (missing) under the new root.
@@ -897,6 +1287,38 @@ mod tests {
         // Folder membership carried over onto the re-rooted clip.
         let keep = folder_id_by_name(&dest, "Keep").unwrap().unwrap();
         assert_eq!(list_clips_in_folder(&dest, keep).unwrap().len(), 1);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_bundle_round_trip_preserves_capture_time() {
+        // Export/import must not lose capture dates: with them gone, an imported
+        // library would reorder itself around file mtimes instead.
+        let dir = std::env::temp_dir().join(format!("snippit_bundlecap_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let bundle_path = dir.join("bundle.db");
+
+        let src = mem_db();
+        upsert_clip(&src, "/root/a.mp4", &meta_captured_at(Some(1_234), Some(9_999)), None).unwrap();
+        upsert_clip(&src, "/root/b.mp4", &meta_captured_at(None, Some(500)), None).unwrap();
+        export_index(&src, &bundle_path, "/root").unwrap();
+
+        let bundle = open_db(&bundle_path).unwrap();
+        let dest = mem_db();
+        import_index(&dest, &bundle, dir.to_str().unwrap(), false).unwrap();
+
+        let clips = list_clips(&dest).unwrap();
+        let a = clips.iter().find(|c| c.path.ends_with("a.mp4")).unwrap();
+        let b = clips.iter().find(|c| c.path.ends_with("b.mp4")).unwrap();
+        assert_eq!(a.captured_at, Some(1_234), "a capture time survived export");
+        // A bundle carries capture times but not file mtimes, and import does not
+        // re-probe (the file's mtime at its new location is the copy time, which
+        // would reorder the library on import). The tagless clip therefore keeps
+        // its original ingest order through `added_at`.
+        assert_eq!(b.captured_at, None);
+        assert_eq!(b.effective_captured_at, b.added_at);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
