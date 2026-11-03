@@ -1216,3 +1216,187 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   min-width: 36px;
   text-align: right;
 }
+
+/* ─── Grid library view ──────────────────────────────────────────────────────── */
+
+.grid-view {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.grid-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.grid-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.grid-empty {
+  color: var(--text-faint);
+  font-size: 13px;
+  text-align: center;
+  margin: 0;
+  padding: 40px 16px;
+  flex: 1;
+}
+
+.grid-cards {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  align-content: flex-start;
+  justify-content: center;
+}
+
+.grid-card {
+  flex: 1 1 260px;
+  max-width: 360px;
+  min-width: 220px;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: var(--panel-raised);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.grid-card:hover {
+  border-color: var(--accent-border);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
+.grid-thumb-wrap {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  background: var(--panel);
+}
+
+.grid-thumb {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.grid-thumb-empty {
+  background: linear-gradient(135deg, var(--panel-raised), var(--panel));
+}
+
+.grid-duration {
+  position: absolute;
+  bottom: 6px;
+  right: 6px;
+  background: rgba(0, 0, 0, 0.78);
+  color: #fff;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+.grid-card-actions-overlay {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.65) 0%, transparent 50%);
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-end;
+  padding: 8px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+}
+
+.grid-card:hover .grid-card-actions-overlay {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Override the sidebar action styles to work on the overlay */
+.grid-card-actions-overlay .library-actions {
+  width: auto;
+  overflow: visible;
+  opacity: 1;
+  gap: 4px;
+}
+
+.grid-card-actions-overlay .library-fav {
+  opacity: 1;
+  font-size: 16px;
+  width: auto;
+  height: auto;
+  color: #fff;
+}
+
+.grid-card-actions-overlay .library-remove {
+  opacity: 1;
+  font-size: 16px;
+  width: auto;
+  height: auto;
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.grid-card-actions-overlay .library-cloud-delete {
+  opacity: 1;
+  font-size: 15px;
+}
+
+.grid-card-actions-overlay .library-folder-select {
+  opacity: 1;
+  font-size: 11px;
+  background: rgba(0, 0, 0, 0.5);
+  color: rgba(255, 255, 255, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: var(--radius-sm);
+  padding: 2px 4px;
+  max-width: 90px;
+}
+
+.grid-card-body {
+  padding: 8px 10px 10px;
+}
+
+.grid-card-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.grid-card-meta {
+  font-size: 11px;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+  margin-top: 2px;
+}
+
+.grid-card-rename-input {
+  width: 100%;
+  padding: 2px 6px;
+  font-size: 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--accent-border);
+  background: var(--panel-raised);
+  color: var(--text);
+  box-sizing: border-box;
+}
