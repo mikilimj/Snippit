@@ -96,8 +96,20 @@ Once built, launch the binary directly without going through npm, e.g. on Linux:
 
 ### Arch Linux / AUR
 
-Package definitions are available under [`packaging/aur/`](packaging/aur/):
-`snippit` (builds from source) and `snippit-bin` (prebuilt `.deb` repackaged).
+Snippit is available on the AUR:
+
+- [`snippit-bin`](https://aur.archlinux.org/packages/snippit-bin) — installs the prebuilt release.
+- [`snippit`](https://aur.archlinux.org/packages/snippit) — builds the release from source.
+
+Install the prebuilt package with an AUR helper such as `paru`:
+
+```bash
+paru -S snippit-bin
+```
+
+Both packages use Arch's system `ffmpeg`, `ffprobe`, and `rclone` instead of
+bundled sidecars. Package definitions are maintained under
+[`packaging/aur/`](packaging/aur/).
 
 ### Running the tests
 
