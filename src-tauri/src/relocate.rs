@@ -212,7 +212,7 @@ mod tests {
 
     fn temp_subdir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "clipsnip_relocate_{name}_{}_{}",
+            "snippit_relocate_{name}_{}_{}",
             std::process::id(),
             name.len()
         ));
@@ -229,6 +229,8 @@ mod tests {
             container: "mp4".into(),
             video_codec: "h264".into(),
             audio_tracks: vec![],
+            captured_at: None,
+            file_mtime: None,
         }
     }
 

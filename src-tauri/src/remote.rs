@@ -1,5 +1,5 @@
-//! Typed wrapper around the bundled rclone sidecar. ClipSnip owns a private
-//! rclone config holding exactly one remote named `clipsnip`; every command
+//! Typed wrapper around the bundled rclone sidecar. Snippit owns a private
+//! rclone config holding exactly one remote named `snippit`; every command
 //! pins `--config` so the user's own rclone setup is never touched. Arg
 //! builders are pure so they can be unit tested; the async runner lives in
 //! lib.rs where the AppHandle is available.
@@ -7,7 +7,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-pub const REMOTE_NAME: &str = "clipsnip";
+pub const REMOTE_NAME: &str = "snippit";
 
 #[derive(Debug, Clone)]
 pub enum SftpAuth {
@@ -79,7 +79,7 @@ pub fn delete_remote_args(config_path: &Path) -> Vec<String> {
     args
 }
 
-/// Builds `clipsnip:<base>/ClipSnip[/<sub>]`. Empty sub returns the ClipSnip
+/// Builds `snippit:<base>/Snippit[/<sub>]`. Empty sub returns the Snippit
 /// root itself. Trailing slashes on base are tolerated.
 pub fn remote_dir(base_path: Option<&str>, sub: &str) -> String {
     let base = base_path.unwrap_or("").trim_matches('/');
@@ -88,7 +88,7 @@ pub fn remote_dir(base_path: Option<&str>, sub: &str) -> String {
         out.push_str(base);
         out.push('/');
     }
-    out.push_str("ClipSnip");
+    out.push_str("Snippit");
     if !sub.is_empty() {
         out.push('/');
         out.push_str(sub);
@@ -282,7 +282,7 @@ mod tests {
         // --obscure is a `config create` flag, not a global one: placed before
         // the subcommand, rclone consumes "config" as its value and fails with
         // `unknown command "create"`.
-        assert!(joined.contains("config create --obscure clipsnip sftp"));
+        assert!(joined.contains("config create --obscure snippit sftp"));
         assert!(joined.contains("host=nas.local"));
         assert!(joined.contains("port=22"));
         assert!(joined.contains("user=milosz"));
@@ -302,24 +302,24 @@ mod tests {
     #[test]
     fn create_oauth_args_names_the_provider() {
         let joined = create_oauth_args(cfg(), "dropbox").join(" ");
-        assert!(joined.contains("config create clipsnip dropbox"));
+        assert!(joined.contains("config create snippit dropbox"));
     }
 
     #[test]
     fn remote_dir_joins_base_path_and_defaults_to_root() {
-        assert_eq!(remote_dir(Some("backups"), "Clips"), "clipsnip:backups/ClipSnip/Clips");
-        assert_eq!(remote_dir(None, "Clips"), "clipsnip:ClipSnip/Clips");
-        assert_eq!(remote_dir(Some("a/"), ""), "clipsnip:a/ClipSnip");
+        assert_eq!(remote_dir(Some("backups"), "Clips"), "snippit:backups/Snippit/Clips");
+        assert_eq!(remote_dir(None, "Clips"), "snippit:Snippit/Clips");
+        assert_eq!(remote_dir(Some("a/"), ""), "snippit:a/Snippit");
     }
 
     #[test]
     fn copyto_lsjson_deletefile_args_shape() {
-        assert_eq!(copyto_args(cfg(), "/tmp/a.mp4", "clipsnip:ClipSnip/Clips/a.mp4")[..3].to_vec(),
+        assert_eq!(copyto_args(cfg(), "/tmp/a.mp4", "snippit:Snippit/Clips/a.mp4")[..3].to_vec(),
             vec!["--config", "/cfg/rclone.conf", "--auto-confirm"]);
-        let ls = lsjson_args(cfg(), "clipsnip:ClipSnip/Clips");
+        let ls = lsjson_args(cfg(), "snippit:Snippit/Clips");
         assert!(ls.contains(&"lsjson".to_string()) && ls.contains(&"-R".to_string())
             && ls.contains(&"--files-only".to_string()));
-        let del = deletefile_args(cfg(), "clipsnip:ClipSnip/Clips/a.mp4");
+        let del = deletefile_args(cfg(), "snippit:Snippit/Clips/a.mp4");
         assert!(del.contains(&"deletefile".to_string()));
     }
 

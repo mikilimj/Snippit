@@ -1,12 +1,12 @@
 use std::process::Command;
 
-use clipsnip_lib::media::build_thumbnail_args;
+use snippit_lib::media::build_thumbnail_args;
 
 #[test]
 fn generates_a_real_jpeg_thumbnail_from_a_clip() {
     let dir = std::env::temp_dir();
-    let src = dir.join("clipsnip_thumb_src.mp4");
-    let thumb = dir.join("clipsnip_thumb_out.jpg");
+    let src = dir.join("snippit_thumb_src.mp4");
+    let thumb = dir.join("snippit_thumb_out.jpg");
     let src_s = src.to_str().unwrap();
     let thumb_s = thumb.to_str().unwrap();
     let _ = std::fs::remove_file(&thumb);

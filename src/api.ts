@@ -14,6 +14,10 @@ export interface ClipMeta {
   container: string;
   videoCodec: string;
   audioTracks: AudioTrack[];
+  /** Recording timestamp (Unix seconds) from container metadata, if present. */
+  capturedAt: number | null;
+  /** File mtime at probe time (Unix seconds) — the fallback sort key. */
+  fileMtime: number | null;
 }
 
 export interface TrackConfig {
@@ -50,6 +54,10 @@ export interface ClipRow {
   favorite: boolean;
   missing: boolean;
   addedAt: number;
+  /** Recording timestamp (Unix seconds) from container metadata, if present. */
+  capturedAt: number | null;
+  /** What the library sorts on: `capturedAt`, else the file's mtime. */
+  effectiveCapturedAt: number;
 }
 
 /** Insert (or refresh the metadata of) a clip in the persistent library index. */
@@ -57,7 +65,7 @@ export function addToLibrary(path: string, meta: ClipMeta): Promise<ClipRow> {
   return invoke<ClipRow>("add_to_library", { path, meta });
 }
 
-/** Load all persisted library clips, newest first. */
+/** Load all persisted library clips, most recently captured first. */
 export function listLibrary(): Promise<ClipRow[]> {
   return invoke<ClipRow[]>("list_library");
 }

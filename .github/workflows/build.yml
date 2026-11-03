@@ -154,13 +154,13 @@ jobs:
         if: github.event_name != 'release'
         uses: actions/upload-artifact@v4
         with:
-          name: clipsnip-${{ matrix.target }}
+          name: snippit-${{ matrix.target }}
           path: |
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*
           if-no-files-found: error
 
-  # Pushes version bumps for both AUR packages (clipsnip builds the release
-  # tag from source, clipsnip-bin repacks the .deb uploaded by the build job).
+  # Pushes version bumps for both AUR packages (snippit builds the release
+  # tag from source, snippit-bin repacks the .deb uploaded by the build job).
   # Needs the AUR_SSH_PRIVATE_KEY secret: the private half of an SSH key whose
   # public half is registered on the AUR account that owns both packages.
   publish-aur:
@@ -183,27 +183,33 @@ jobs:
             --json assets -q '.assets[].name' | grep '_amd64\.deb$')
           test -n "$deb_asset"
           sed -i "s/^pkgver=.*/pkgver=$version/; s/^pkgrel=.*/pkgrel=1/" \
-            packaging/aur/clipsnip/PKGBUILD packaging/aur/clipsnip-bin/PKGBUILD
+            packaging/aur/snippit/PKGBUILD packaging/aur/snippit-bin/PKGBUILD
           sed -i "s|^source=(.*|source=(\"\$url/releases/download/v\$pkgver/$deb_asset\")|" \
-            packaging/aur/clipsnip-bin/PKGBUILD
+            packaging/aur/snippit-bin/PKGBUILD
 
-      - name: Publish clipsnip to AUR
+      - name: Publish snippit to AUR
         uses: KSXGitHub/github-actions-deploy-aur@v4.1.3
         with:
-          pkgname: clipsnip
-          pkgbuild: packaging/aur/clipsnip/PKGBUILD
-          assets: packaging/aur/clipsnip/clipsnip.desktop
+          pkgname: snippit
+          pkgbuild: packaging/aur/snippit/PKGBUILD
+          assets: packaging/aur/snippit/snippit.desktop
           updpkgsums: true
+          # updpkgsums downloads the release source tarball into the repo
+          # working directory to compute its checksum; since `assets` is set
+          # above, the action commits with `git add --all` and would sweep
+          # that tarball in too, exceeding the AUR git hook's ~488KiB blob
+          # size limit and getting the push rejected. Drop it before commit.
+          post_process: rm -f *.tar.gz
           commit_username: mikilimj
           commit_email: milosz@medportal.pl
           ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
           commit_message: "Update to ${{ github.event.release.tag_name }}"
 
-      - name: Publish clipsnip-bin to AUR
+      - name: Publish snippit-bin to AUR
         uses: KSXGitHub/github-actions-deploy-aur@v4.1.3
         with:
-          pkgname: clipsnip-bin
-          pkgbuild: packaging/aur/clipsnip-bin/PKGBUILD
+          pkgname: snippit-bin
+          pkgbuild: packaging/aur/snippit-bin/PKGBUILD
           updpkgsums: true
           commit_username: mikilimj
           commit_email: milosz@medportal.pl

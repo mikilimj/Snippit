@@ -1,4 +1,4 @@
-mod probe;
+pub mod probe;
 pub mod bundle;
 pub mod export;
 pub mod setup;
@@ -173,7 +173,12 @@ async fn probe_path(app: &tauri::AppHandle, path: &str) -> Result<ClipMeta, Stri
     if !output.status.success() {
         return Err(String::from_utf8_lossy(&output.stderr).to_string());
     }
-    parse_ffprobe_json(&String::from_utf8_lossy(&output.stdout))
+    let mut meta = parse_ffprobe_json(&String::from_utf8_lossy(&output.stdout))?;
+    // Cheap, and the library needs it to order clips whose container carries no
+    // capture time. `file_mtime_unix` yields 0 when the stat fails; store `None`
+    // instead so an unreadable file sorts last rather than pretending to be 1970.
+    meta.file_mtime = Some(file_mtime_unix(Path::new(path))).filter(|t| *t > 0);
+    Ok(meta)
 }
 
 #[tauri::command]
@@ -200,7 +205,7 @@ async fn prepare_audio_tracks(
     for &idx in &stream_indices {
         // "fs" marks faststart output — older cache files without it lack the
         // up-front moov atom and would force an extra end-of-file fetch.
-        let out_path = tmp_dir.join(format!("clipsnip-a{idx}-{path_hash:x}-fs.m4a"));
+        let out_path = tmp_dir.join(format!("snippit-a{idx}-{path_hash:x}-fs.m4a"));
         let out_str = out_path.to_string_lossy().to_string();
 
         if !out_path.exists() {
@@ -257,7 +262,7 @@ async fn audio_chunk(
     static CHUNK_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let seq = CHUNK_SEQ.fetch_add(1, Ordering::Relaxed);
     let out = std::env::temp_dir().join(format!(
-        "clipsnip-chunk-{}-{seq}.wav",
+        "snippit-chunk-{}-{seq}.wav",
         std::process::id()
     ));
     let out_str = out.to_string_lossy().to_string();
@@ -489,7 +494,7 @@ async fn export_compressed(
 
     let mut hasher = DefaultHasher::new();
     output.hash(&mut hasher);
-    let passlog = std::env::temp_dir().join(format!("clipsnip-2pass-{:x}", hasher.finish()));
+    let passlog = std::env::temp_dir().join(format!("snippit-2pass-{:x}", hasher.finish()));
     let passlog_str = passlog.to_string_lossy().to_string();
 
     app.state::<ExportJob>()
@@ -576,7 +581,7 @@ async fn export_sequence(
 
     let mut hasher = DefaultHasher::new();
     output.hash(&mut hasher);
-    let passlog = std::env::temp_dir().join(format!("clipsnip-seq2pass-{:x}", hasher.finish()));
+    let passlog = std::env::temp_dir().join(format!("snippit-seq2pass-{:x}", hasher.finish()));
     let passlog_str = passlog.to_string_lossy().to_string();
 
     // Quality mode is one pass; a size target adds a CPU analysis pass first.
@@ -795,7 +800,7 @@ async fn export_library(
     let dest_path = PathBuf::from(&dest);
     let done = tauri::async_runtime::spawn_blocking(move || {
         let src_conn = open_library(&app2)?;
-        let tmp = std::env::temp_dir().join(format!("clipsnip_export_{}", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("snippit_export_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
         let bundle_db = tmp.join("library.db");
@@ -848,7 +853,7 @@ async fn import_library(
     let bundle_p = PathBuf::from(&bundle_path);
     let new_root_p = PathBuf::from(&new_root);
     let outcome = tauri::async_runtime::spawn_blocking(move || {
-        let tmp = std::env::temp_dir().join(format!("clipsnip_import_{}", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("snippit_import_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         let bundle_db = bundle::read_bundle(&bundle_p, &tmp)?;
 
@@ -1282,7 +1287,7 @@ async fn ensure_thumbnail(
 
 // ── Remote storage sync (spec 2026-07-06) ─────────────────────────────────────
 //
-// One rclone remote (`clipsnip`) backs the whole feature; every upload path is
+// One rclone remote (`snippit`) backs the whole feature; every upload path is
 // derived, never persisted as a queue. Sync only ever *uploads* — it never
 // deletes or downloads on its own. A single worker drains the derived queue one
 // file at a time; a 300 s timer re-plans. See task-6 brief for the full design.
@@ -1387,7 +1392,7 @@ async fn run_ffmpeg_plain(app: &tauri::AppHandle, args: Vec<String>) -> Result<(
     }
 }
 
-/// Path of ClipSnip's private rclone config (never the user's own rclone setup).
+/// Path of Snippit's private rclone config (never the user's own rclone setup).
 fn rclone_config_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
     let _ = std::fs::create_dir_all(&config_dir);
@@ -1419,8 +1424,8 @@ fn require_connection(app: &tauri::AppHandle) -> Result<(PathBuf, Option<String>
     Ok((root, settings.remote_base_path))
 }
 
-/// The remote path of the base directory itself (parent of `ClipSnip/`), used to
-/// probe reachability with `lsd` before the ClipSnip tree is created.
+/// The remote path of the base directory itself (parent of `Snippit/`), used to
+/// probe reachability with `lsd` before the Snippit tree is created.
 fn remote_base_target(base: Option<&str>) -> String {
     let b = base.unwrap_or("").trim_matches('/');
     if b.is_empty() {
@@ -1929,7 +1934,7 @@ async fn finalize_connect(
     let base = base_path.as_deref();
 
     // Reachability / credential check against the base dir (which exists before the
-    // ClipSnip tree does).
+    // Snippit tree does).
     run_rclone(app, remote::lsd_check_args(&cfg, &remote_base_target(base)))
         .await
         .map_err(|e| format!("Could not reach the remote: {e}"))?;
@@ -2243,7 +2248,7 @@ pub fn run() {
                 use tauri::menu::{Menu, MenuItem};
                 use tauri::tray::TrayIconBuilder;
 
-                let open_item = MenuItem::with_id(app, "open", "Open ClipSnip", true, None::<&str>)?;
+                let open_item = MenuItem::with_id(app, "open", "Open Snippit", true, None::<&str>)?;
                 let sync_item = MenuItem::with_id(app, "sync", "Sync now", true, None::<&str>)?;
                 let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
                 let menu = Menu::with_items(app, &[&open_item, &sync_item, &quit_item])?;
