@@ -31,6 +31,14 @@ function clipRelName(appRoot: string | null | undefined, path: string): string |
   return norm.startsWith(prefix) ? norm.slice(prefix.length) : null;
 }
 
+// The capture date in a sidebar row's meta line, computed once per render. Stays
+// quiet for clips whose container carried no capture metadata: the library then
+// sorts them by file mtime, which would be the copy date, not a recording date.
+function CaptureDate({ row }: { row: ClipRow }) {
+  const label = captureLabel(row);
+  return label ? <>{label} · </> : null;
+}
+
 function App() {
   const [path, setPath] = useState<string | null>(null);
   const [meta, setMeta] = useState<ClipMeta | null>(null);
@@ -983,7 +991,7 @@ function App() {
                     {/* The library sorts by capture date, so showing it makes the
                         order legible. Clips whose container carries no capture
                         metadata show nothing rather than a misleading mtime. */}
-                    {captureLabel(entry) && <>{captureLabel(entry)} · </>}
+                    <CaptureDate row={entry} />
                     {entry.durationSecs.toFixed(1)}s · {entry.width}×{entry.height}
                   </span>
                 </div>

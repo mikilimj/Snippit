@@ -24,6 +24,7 @@ pub struct ClipMeta {
     /// while its mtime becomes the copy date. `None` when the file carries no
     /// capture metadata at all, in which case the library falls back to the
     /// file's mtime.
+    #[serde(default)]
     pub captured_at: Option<i64>,
     /// The source file's mtime at probe time, in Unix seconds. Stored so the
     /// library can order clips that carry no capture metadata without touching the
@@ -63,10 +64,17 @@ pub fn parse_ffprobe_json(json: &str) -> Result<ClipMeta, String> {
         .ok_or("format.duration missing or unparseable")?;
 
     // Prefer the container's own mux-level tag, then the video stream's, then any
-    // other stream's — recorders disagree on where they write it.
+    // other A/V stream's — recorders disagree on where they write it. Subtitle and
+    // attachment streams are skipped: muxers often write the *mux* time there,
+    // which would read as a capture time.
     let captured_at = find_capture_time(&v["format"]["tags"])
         .or_else(|| find_capture_time(&video["tags"]))
-        .or_else(|| streams.iter().find_map(|s| find_capture_time(&s["tags"])));
+        .or_else(|| {
+            streams
+                .iter()
+                .filter(|s| s["codec_type"] == "video" || s["codec_type"] == "audio")
+                .find_map(|s| find_capture_time(&s["tags"]))
+        });
 
     Ok(ClipMeta {
         duration_secs,
@@ -117,7 +125,7 @@ pub fn parse_capture_time(raw: &str) -> Option<i64> {
     let year: i64 = date[0..4].parse().ok()?;
     let month: i64 = date[5..7].parse().ok()?;
     let day: i64 = date[8..10].parse().ok()?;
-    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+    if !(1..=12).contains(&month) || day < 1 || day > days_in_month(year, month) {
         return None;
     }
     let mut secs = days_from_civil(year, month, day) * 86_400;
@@ -131,7 +139,9 @@ pub fn parse_capture_time(raw: &str) -> Option<i64> {
     let (hms, zone) = match rest.find(['Z', 'z', '+']) {
         Some(i) => (&rest[..i], &rest[i..]),
         // A '-' can only start a negative offset after the time, so look past it.
-        None => match rest[8..].find('-').map(|i| i + 8) {
+        // `get` keeps a truncated tag (`2026-11-03T14`) a parse failure, not a panic:
+        // slicing `rest[8..]` on a short time part aborted the probe instead.
+        None => match rest.get(8..).and_then(|tail| tail.find('-').map(|i| i + 8)) {
             Some(i) => (&rest[..i], &rest[i..]),
             None => (rest, ""),
         },
@@ -148,15 +158,29 @@ pub fn parse_capture_time(raw: &str) -> Option<i64> {
     if let Some(off) = zone.strip_prefix(['-', '+']) {
         let sign = if zone.starts_with('-') { -1 } else { 1 };
         // Containers emit both `+01:00` and the ISO 8601 basic form `+0100`.
+        // `get` rather than slicing: the offset comes from container metadata and
+        // may contain non-ASCII bytes, which would split a char boundary.
         let (oh, om): (i64, i64) = match off.split_once(':') {
             Some((h, m)) => (h.parse().ok()?, m.parse().ok()?),
-            None if off.len() == 4 => (off[..2].parse().ok()?, off[2..].parse().ok()?),
+            None if off.len() == 4 => (off.get(..2)?.parse().ok()?, off.get(2..)?.parse().ok()?),
             None if off.len() == 2 => (off.parse().ok()?, 0),
             None => return None,
         };
         secs -= sign * (oh * 3_600 + om * 60);
     }
     Some(secs)
+}
+
+/// Days in a month, leap years included. Without it an impossible tag like
+/// `2026-02-31` is silently normalised into March instead of being rejected.
+fn days_in_month(year: i64, month: i64) -> i64 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) => 29,
+        2 => 28,
+        _ => 0,
+    }
 }
 
 /// Days since 1970-01-01 for a proleptic Gregorian date (Howard Hinnant's
@@ -289,10 +313,38 @@ mod tests {
             "2026-13-01T00:00:00Z", // month 13
             "2026-11-03T25:00:00Z", // hour 25
             "2026-11-03T14:99:00Z", // minute 99
+            "2026-02-31T00:00:00Z", // Feb 31 — would otherwise slide into March
+            "2025-02-29T00:00:00Z", // 2025 is not a leap year
             "20261103",             // no separators
         ] {
             assert_eq!(parse_capture_time(junk), None, "should reject {junk:?}");
         }
+        // The leap day of an actual leap year still parses.
+        assert!(parse_capture_time("2024-02-29T12:00:00Z").is_some());
+    }
+
+    #[test]
+    fn truncated_time_parts_are_rejected_without_panicking() {
+        // Regression: the negative-offset probe sliced `rest[8..]`, so any tag
+        // whose time part was shorter than `HH:MM:SS` aborted the whole probe
+        // instead of yielding `None` — one bad tag made a clip unindexable.
+        let utc = parse_capture_time("2026-11-03T14:22:01Z").unwrap();
+        for junk in ["2026-11-03T14", "2026-11-03T1"] {
+            assert_eq!(parse_capture_time(junk), None, "should reject {junk:?}");
+        }
+        // Shorter but structurally complete times still parse, as before: seconds
+        // are optional, and an unpadded hour is accepted.
+        assert_eq!(parse_capture_time("2026-11-03T14:22").unwrap(), utc - 1);
+        assert_eq!(parse_capture_time("2026-11-03 8:22:01").unwrap(), utc - 6 * 3_600);
+        assert!(parse_capture_time("2026-11-03 8:00").is_some());
+    }
+
+    #[test]
+    fn a_non_ascii_offset_is_rejected_without_panicking() {
+        // Regression: `off[..2]` on container-supplied bytes could split a char
+        // boundary. Metadata is untrusted input; it must never panic.
+        assert_eq!(parse_capture_time("2026-11-03T14:22:01+\u{4e00}2"), None);
+        assert_eq!(parse_capture_time("2026-11-03T14:22:01+\u{e9}1:00"), None);
     }
 
     #[test]
