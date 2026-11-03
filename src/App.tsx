@@ -15,6 +15,9 @@ import { useResizable } from "./useResizable";
 import { FirstRunWizard } from "./FirstRunWizard";
 import { SettingsModal } from "./SettingsModal";
 import { SyncDiffModal } from "./SyncDiffModal";
+import FolderRail from "./FolderRail";
+import ClipCardActions from "./ClipCardActions";
+import LibraryGrid from "./LibraryGrid";
 import logo from "./assets/logo.png";
 import "./App.css";
 
@@ -54,6 +57,7 @@ function App() {
   const [library, setLibrary] = useState<ClipRow[]>([]);
   const [folders, setFolders] = useState<Folder[]>([]);
   const [activeView, setActiveView] = useState<LibraryView>({ kind: "all" });
+  const [viewMode, setViewMode] = useState<"sidebar" | "grid">("sidebar");
   const [creatingFolder, setCreatingFolder] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -294,6 +298,15 @@ function App() {
     return teardownAudio;
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [audioTrackPaths]);
+
+  // ── Stop preview audio when the editor leaves the screen ──────────────────────
+  // Grid view returns a different tree, so the <video> unmounts without ever
+  // firing pause — React strips its listeners on the way out. Sources already
+  // scheduled on the AudioContext would keep playing on the audio thread for up
+  // to a full chunk, so pause the engine explicitly on the transition.
+  useEffect(() => {
+    if (viewMode === "grid") engineRef.current?.pause();
+  }, [viewMode]);
 
   // ── Sync the engine when video plays / pauses / seeks ─────────────────────────
   function onVideoPlay() {
@@ -747,6 +760,10 @@ function App() {
     const name = editingName.trim();
     setEditingId(null);
     if (!name) return;
+    doRename(id, name);
+  }
+
+  async function doRename(id: number, name: string) {
     setLibrary(prev => applyRename(prev, id, name));
     if (id < 0) return;
     try {
@@ -755,6 +772,11 @@ function App() {
       console.error("Failed to rename clip:", err);
       loadView(activeView);
     }
+  }
+
+  // Called by the grid view's inline rename (it has its own editingId state).
+  function handleGridRename(id: number, name: string) {
+    doRename(id, name);
   }
 
   async function addToFolder(clipId: number, folderId: number) {
@@ -829,6 +851,58 @@ function App() {
     return <FirstRunWizard onComplete={handleSetupComplete} />;
   }
 
+  if (viewMode === "grid") {
+    return (
+      <>
+        {settingsOpen && (
+          <SettingsModal
+            onClose={() => setSettingsOpen(false)}
+            onOpenDiff={() => {
+              setSettingsOpen(false);
+              setDiffOpen(true);
+            }}
+          />
+        )}
+        {diffOpen && (
+          <SyncDiffModal
+            onClose={() => setDiffOpen(false)}
+            onImported={() => loadView(activeView)}
+            library={library}
+            mediaPort={mediaPort}
+          />
+        )}
+        <LibraryGrid
+          library={library}
+          folders={folders}
+          activeView={activeView}
+          onSelectView={setActiveView}
+          onDeleteFolder={deleteFolderClick}
+          creatingFolder={creatingFolder}
+          newFolderName={newFolderName}
+          onNewFolderNameChange={setNewFolderName}
+          onCreateFolder={createFolderClick}
+          onCancelCreateFolder={cancelFolderCreation}
+          onStartCreateFolder={() => setCreatingFolder(true)}
+          onOpenClip={openClip}
+          onToggleFavorite={toggleFavorite}
+          onAddToFolder={addToFolder}
+          onRemoveFromLibrary={removeFromLibraryClick}
+          onRemoveFromCurrentFolder={removeFromCurrentFolder}
+          onRenameClip={handleGridRename}
+          onDeleteFromServer={deleteFromServer}
+          mediaPort={mediaPort}
+          storageProvider={storageProvider}
+          syncedRels={syncedRels}
+          appRoot={appRoot}
+          onRescan={() => rescanLibrary().catch(err => console.error("Rescan failed:", err))}
+          onSettings={() => setSettingsOpen(true)}
+          onPickClip={pickClip}
+          onBackToEditor={() => setViewMode("sidebar")}
+        />
+      </>
+    );
+  }
+
   return (
     <div className="app-layout">
       {settingsOpen && (
@@ -859,6 +933,13 @@ function App() {
           <div className="library-header-actions">
             <button
               className="btn-sm"
+              title="Grid view"
+              onClick={() => setViewMode("grid")}
+            >
+              ⧉
+            </button>
+            <button
+              className="btn-sm"
               title="Re-scan watched folders"
               onClick={() => rescanLibrary().catch(err => console.error("Rescan failed:", err))}
             >
@@ -870,67 +951,18 @@ function App() {
             <button className="btn-sm" onClick={pickClip}>+ Open</button>
           </div>
         </div>
-        <nav className="folder-rail">
-          <button
-            className={`folder-chip${activeView.kind === "all" ? " active" : ""}`}
-            onClick={() => setActiveView({ kind: "all" })}
-          >
-            All
-          </button>
-          <button
-            className={`folder-chip${activeView.kind === "favorites" ? " active" : ""}`}
-            onClick={() => setActiveView({ kind: "favorites" })}
-          >
-            ★ Favorites
-          </button>
-          <button
-            className={`folder-chip${activeView.kind === "unsorted" ? " active" : ""}`}
-            onClick={() => setActiveView({ kind: "unsorted" })}
-          >
-            Unsorted
-          </button>
-          {folders.map(f => (
-            <span
-              key={f.id}
-              className={`folder-chip folder-chip-user${
-                activeView.kind === "folder" && activeView.id === f.id ? " active" : ""
-              }`}
-            >
-              <button
-                className="folder-chip-label"
-                onClick={() => setActiveView({ kind: "folder", id: f.id })}
-              >
-                {f.name}
-              </button>
-              <button
-                className="folder-chip-delete"
-                title="Delete folder (keeps the clips)"
-                aria-label="Delete folder"
-                onClick={e => deleteFolderClick(e, f)}
-              >
-                ×
-              </button>
-            </span>
-          ))}
-          {creatingFolder ? (
-            <input
-              className="folder-new-input"
-              autoFocus
-              value={newFolderName}
-              placeholder="Folder name"
-              onChange={e => setNewFolderName(e.target.value)}
-              onKeyDown={e => {
-                if (e.key === "Enter") createFolderClick();
-                if (e.key === "Escape") cancelFolderCreation();
-              }}
-              onBlur={cancelFolderCreation}
-            />
-          ) : (
-            <button className="folder-chip folder-new" onClick={() => setCreatingFolder(true)}>
-              + Folder
-            </button>
-          )}
-        </nav>
+        <FolderRail
+          folders={folders}
+          activeView={activeView}
+          onSelectView={setActiveView}
+          onDeleteFolder={deleteFolderClick}
+          creatingFolder={creatingFolder}
+          newFolderName={newFolderName}
+          onNewFolderNameChange={setNewFolderName}
+          onCreateFolder={createFolderClick}
+          onCancelCreateFolder={cancelFolderCreation}
+          onStartCreateFolder={() => setCreatingFolder(true)}
+        />
         {library.length === 0 ? (
           <p className="library-empty">
             {activeView.kind === "all"
@@ -995,70 +1027,18 @@ function App() {
                     {entry.durationSecs.toFixed(1)}s · {entry.width}×{entry.height}
                   </span>
                 </div>
-                <div className="library-actions">
-                  <button
-                    className={`library-fav${entry.favorite ? " on" : ""}`}
-                    title={entry.favorite ? "Unfavorite" : "Mark as favorite"}
-                    aria-label={entry.favorite ? "Unfavorite" : "Mark as favorite"}
-                    onClick={e => toggleFavorite(e, entry)}
-                  >
-                    {entry.favorite ? "★" : "☆"}
-                  </button>
-                  {storageProvider !== null && (
-                    <button
-                      className="library-remove library-cloud-delete"
-                      title={
-                        syncedRels.has(clipRelName(appRoot, entry.path) ?? "")
-                          ? "Delete from server (keeps the local file)"
-                          : "Not uploaded to the server yet"
-                      }
-                      aria-label="Delete from server"
-                      disabled={!syncedRels.has(clipRelName(appRoot, entry.path) ?? "")}
-                      onClick={e => deleteFromServer(e, entry)}
-                    >
-                      ☁
-                    </button>
-                  )}
-                  {folders.length > 0 && (
-                    <select
-                      className="library-folder-select"
-                      title="Add to folder"
-                      value=""
-                      onClick={e => e.stopPropagation()}
-                      onChange={e => {
-                        const fid = Number(e.target.value);
-                        if (fid) addToFolder(entry.id, fid);
-                        e.target.value = "";
-                      }}
-                    >
-                      <option value="">＋Folder</option>
-                      {folders.map(f => (
-                        <option key={f.id} value={f.id}>
-                          {f.name}
-                        </option>
-                      ))}
-                    </select>
-                  )}
-                  {activeView.kind === "folder" ? (
-                    <button
-                      className="library-remove"
-                      title="Remove from this folder"
-                      aria-label="Remove from this folder"
-                      onClick={e => removeFromCurrentFolder(e, entry.id)}
-                    >
-                      −
-                    </button>
-                  ) : (
-                    <button
-                      className="library-remove"
-                      title="Remove from library (keeps the file)"
-                      aria-label="Remove from library"
-                      onClick={e => removeFromLibraryClick(e, entry)}
-                    >
-                      ×
-                    </button>
-                  )}
-                </div>
+                <ClipCardActions
+                    entry={entry}
+                    activeView={activeView}
+                    folders={folders}
+                    storageProvider={storageProvider}
+                    syncedToServer={syncedRels.has(clipRelName(appRoot, entry.path) ?? "")}
+                    onToggleFavorite={toggleFavorite}
+                    onAddToFolder={addToFolder}
+                    onRemoveFromLibrary={removeFromLibraryClick}
+                    onRemoveFromCurrentFolder={removeFromCurrentFolder}
+                    onDeleteFromServer={deleteFromServer}
+                  />
               </li>
             ))}
           </ul>
