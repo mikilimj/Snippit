@@ -102,7 +102,7 @@ export default function LibraryGrid({
       <div className="grid-header">
         <div className="brand-row">
           <img className="brand-logo" src={logo} alt="" />
-          <span className="brand-name">ClipSnip</span>
+          <span className="brand-name">Snippit</span>
         </div>
         <div className="grid-toolbar">
           <button
