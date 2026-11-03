@@ -17,34 +17,33 @@ permissions:
   contents: read
 
 jobs:
-  # Cheap gate so a frontend-only push never pays for WebKitGTK + cargo, and a
-  # docs-only push costs ~10s instead of a full run.
-  changes:
-    name: Detect changed paths
+  check:
+    name: Typecheck
     runs-on: ubuntu-22.04
-    timeout-minutes: 5
-    outputs:
-      frontend: ${{ steps.classify.outputs.frontend }}
-      rust: ${{ steps.classify.outputs.rust }}
+    timeout-minutes: 15
     steps:
+      # Depth 1: the changed-file list comes from the event payload, not from
+      # history (a full clone costs ~10s here, which is a third of a fast run).
       - name: Checkout repository
         uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
 
+      # Everything below is gated on this, so a src/-only push never provisions
+      # WebKitGTK + cargo (~40s) and a docs-only push never provisions anything.
       - name: Classify changed files
-        id: classify
+        id: changes
         env:
-          BEFORE: ${{ github.event.before }}
-          AFTER: ${{ github.sha }}
+          COMMITS: ${{ toJson(github.event.commits) }}
         run: |
           set -euo pipefail
-          # workflow_dispatch, force-push or a brand-new ref has no usable base
-          # commit; treat everything as changed instead of silently skipping.
-          if [ -z "$BEFORE" ] || ! git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+          # Push events list every added/modified/removed path in the payload, so
+          # no history walk is needed. Payloads that can't be trusted — an empty
+          # one (workflow_dispatch) or a 20+ commit push, which GitHub truncates —
+          # fall back to "everything changed" instead of silently skipping checks.
+          files=$(jq -r 'if length == 0 or length >= 20 then empty
+                          else .[] | (.added + .modified + .removed)[] end' <<< "$COMMITS" | sort -u)
+          if [ -z "$files" ]; then
             files=$(git ls-files)
-          else
-            files=$(git diff --name-only "$BEFORE" "$AFTER")
+            echo "no usable commit payload; assuming every file changed"
           fi
 
           rust=false
@@ -58,48 +57,38 @@ jobs:
           printf '%s\n' "$files" | head -20 || true
           echo "-> rust=$rust frontend=$frontend"
 
-  check:
-    name: Typecheck
-    needs: changes
-    if: needs.changes.outputs.frontend == 'true' || needs.changes.outputs.rust == 'true'
-    runs-on: ubuntu-22.04
-    timeout-minutes: 15
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v5
-
       # ---- frontend (~10s, no system packages needed) ----
       - name: Setup Node.js
-        if: needs.changes.outputs.frontend == 'true'
+        if: steps.changes.outputs.frontend == 'true'
         uses: actions/setup-node@v5
         with:
           node-version: 20
           cache: npm
 
       - name: Install frontend dependencies
-        if: needs.changes.outputs.frontend == 'true'
+        if: steps.changes.outputs.frontend == 'true'
         run: npm ci --no-audit --no-fund
 
       # Types only: tsc --noEmit emits nothing, vite never runs.
       - name: Typecheck frontend
-        if: needs.changes.outputs.frontend == 'true'
+        if: steps.changes.outputs.frontend == 'true'
         run: npx tsc --noEmit
 
-      # ---- rust (~30s warm, ~70s cold) ----
+      # ---- rust (~30s warm, ~65s cold) ----
       # webkit2gtk dev headers are the single biggest cost of this job (62s
       # measured, almost all of it download). apt's .deb archives and package
       # indexes are therefore cached in a workspace-local dir via apt's
       # Dir::Cache/Dir::State overrides — /var/cache/apt is root-owned and
       # actions/cache cannot restore over it.
       - name: Restore apt cache
-        if: needs.changes.outputs.rust == 'true'
+        if: steps.changes.outputs.rust == 'true'
         uses: actions/cache@v4
         with:
           path: .apt-cache
           key: apt-debs-${{ runner.os }}-22.04-webkit2gtk4.1-v1
 
       - name: Install Linux dependencies
-        if: needs.changes.outputs.rust == 'true'
+        if: steps.changes.outputs.rust == 'true'
         env:
           DEBIAN_FRONTEND: noninteractive
           APT_OPTS: >-
@@ -129,7 +118,7 @@ jobs:
       # executed — tauri-build only checks the paths exist, so empty files keep the
       # check fast instead of pulling ~150 MB of ffmpeg/rclone on every push.
       - name: Stub sidecar binaries
-        if: needs.changes.outputs.rust == 'true'
+        if: steps.changes.outputs.rust == 'true'
         run: |
           mkdir -p src-tauri/binaries
           touch src-tauri/binaries/ffmpeg-x86_64-unknown-linux-gnu \
@@ -137,11 +126,11 @@ jobs:
                 src-tauri/binaries/rclone-x86_64-unknown-linux-gnu
 
       - name: Install Rust
-        if: needs.changes.outputs.rust == 'true'
+        if: steps.changes.outputs.rust == 'true'
         uses: dtolnay/rust-toolchain@stable
 
       - name: Rust cache
-        if: needs.changes.outputs.rust == 'true'
+        if: steps.changes.outputs.rust == 'true'
         uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
@@ -152,5 +141,5 @@ jobs:
       # cargo check type-checks the crate and every target (lib, bin, tests)
       # without producing a binary or running beforeBuildCommand.
       - name: Typecheck Rust
-        if: needs.changes.outputs.rust == 'true'
+        if: steps.changes.outputs.rust == 'true'
         run: cargo check --locked --all-targets --manifest-path src-tauri/Cargo.toml
