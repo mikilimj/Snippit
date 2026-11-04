@@ -87,6 +87,7 @@ export function PlayerControls({
         ref={barRef}
         className="pc-bar"
         role="slider"
+        tabIndex={0}
         aria-label="Playback position"
         aria-valuemin={0}
         aria-valuemax={Math.round(duration)}
@@ -101,10 +102,27 @@ export function PlayerControls({
         }}
         onPointerUp={e => {
           scrubbingRef.current = false;
-          e.currentTarget.releasePointerCapture(e.pointerId);
+          if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+            e.currentTarget.releasePointerCapture(e.pointerId);
+          }
         }}
         onPointerCancel={() => {
           scrubbingRef.current = false;
+        }}
+        onKeyDown={e => {
+          // Arrow keys nudge the playhead by a second, Home/End jump to the ends.
+          const step = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
+          if (step !== 0) {
+            e.preventDefault();
+            const next = Math.max(0, Math.min(duration, currentTime + step));
+            setCurrentTime(next);
+            onSeek(next);
+          } else if (e.key === "Home" || e.key === "End") {
+            e.preventDefault();
+            const next = e.key === "Home" ? 0 : duration;
+            setCurrentTime(next);
+            onSeek(next);
+          }
         }}
       >
         <div className="pc-track" />
