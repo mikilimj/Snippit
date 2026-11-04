@@ -200,9 +200,10 @@
   -webkit-user-select: none;
 }
 
-/* The block is a player, not a document — keep text fields and paths selectable. */
-.clip-modal input,
-.clip-modal textarea,
+/* The block is a player, not a document — but text fields and paths stay
+   selectable (grid rename / folder name inputs live outside the popup). */
+input,
+textarea,
 .settings-path {
   user-select: text;
   -webkit-user-select: text;
