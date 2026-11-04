@@ -308,6 +308,12 @@
   user-select: none;
 }
 
+.pc-bar:focus-visible {
+  outline: 2px solid var(--accent-border);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
 .pc-track {
   position: absolute;
   left: 0; right: 0;
