@@ -343,6 +343,15 @@ pub fn remove_clip(conn: &Connection, id: i64) -> Result<(), String> {
     Ok(())
 }
 
+/// Drops the index entry for a source path, if there is one. Used when the file
+/// itself was deleted: the row would otherwise linger as a "missing" clip.
+pub fn remove_clip_by_path(conn: &Connection, path: &str) -> Result<(), String> {
+    if let Some(id) = clip_id_by_path(conn, path)? {
+        remove_clip(conn, id)?;
+    }
+    Ok(())
+}
+
 /// Toggles a clip's favorite flag.
 pub fn set_favorite(conn: &Connection, id: i64, favorite: bool) -> Result<(), String> {
     conn.execute(
@@ -1092,6 +1101,25 @@ mod tests {
         let clips = list_clips(&conn).unwrap();
         assert_eq!(clips.len(), 1);
         assert_eq!(clips[0].path, "/vids/b.mp4");
+    }
+
+    #[test]
+    fn remove_clip_by_path_drops_that_row_and_is_a_no_op_otherwise() {
+        let conn = mem_db();
+        let folder = create_folder(&conn, "Games").unwrap();
+        let row = upsert_clip(&conn, "/vids/a.mp4", &sample_meta(), None).unwrap();
+        add_clip_to_folder(&conn, row.id, folder.id).unwrap();
+        upsert_clip(&conn, "/vids/b.mp4", &sample_meta(), None).unwrap();
+
+        remove_clip_by_path(&conn, "/vids/a.mp4").unwrap();
+        let clips = list_clips(&conn).unwrap();
+        assert_eq!(clips.len(), 1);
+        assert_eq!(clips[0].path, "/vids/b.mp4");
+        assert!(list_clips_in_folder(&conn, folder.id).unwrap().is_empty());
+
+        // A path that was never indexed (or already gone) must not error.
+        remove_clip_by_path(&conn, "/vids/a.mp4").unwrap();
+        assert_eq!(list_clips(&conn).unwrap().len(), 1);
     }
 
     #[test]

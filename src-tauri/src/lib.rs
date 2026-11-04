@@ -927,6 +927,27 @@ fn remove_from_library(app: tauri::AppHandle, id: i64) -> Result<(), String> {
     library::remove_clip(&conn, id)
 }
 
+/// Deletes a clip's source file from disk and drops it from the library index.
+/// The confirmation (and the "index only" alternative) lives in the UI; this
+/// command only ever runs against a regular file the library knows about.
+#[tauri::command]
+fn delete_clip_file(app: tauri::AppHandle, path: String) -> Result<(), String> {
+    let file = std::path::Path::new(&path);
+    if !file.is_file() {
+        return Err(format!("Not a file: {path}"));
+    }
+    std::fs::remove_file(file).map_err(|e| format!("Could not delete {path}: {e}"))?;
+    // The file is gone either way — a failed index cleanup must not report the
+    // delete as failed, it would leave the user thinking the file survived.
+    match open_library(&app).and_then(|conn| library::remove_clip_by_path(&conn, &path)) {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            eprintln!("Deleted {path} but could not drop its index row: {err}");
+            Ok(())
+        }
+    }
+}
+
 #[tauri::command]
 fn set_clip_favorite(app: tauri::AppHandle, id: i64, favorite: bool) -> Result<(), String> {
     let conn = open_library(&app)?;
@@ -2300,6 +2321,7 @@ pub fn run() {
             add_to_library,
             list_library,
             remove_from_library,
+            delete_clip_file,
             rescan_library,
             set_clip_favorite,
             rename_library_clip,
