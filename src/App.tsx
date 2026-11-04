@@ -231,9 +231,11 @@ function App() {
   // already-rendering <video> node WebKitGTK doesn't reliably re-read it from
   // a prop diff, so the element's first (default) embedded track kept playing
   // alongside the same track's Web Audio copy — set the DOM property directly.
+  // The transport's mute has to win too: before the engine is ready the element
+  // is still the one making sound, and it has no volume of its own to scale.
   useEffect(() => {
-    if (videoRef.current) videoRef.current.muted = audioReady;
-  }, [audioReady]);
+    if (videoRef.current) videoRef.current.muted = audioReady || masterMuted;
+  }, [audioReady, masterMuted]);
 
   // Apply the transport bar's master volume to the live engine (and remember it
   // for engines built later, i.e. the next clip).
@@ -974,7 +976,7 @@ function App() {
                 ref={videoRef}
                 key={previewPath(path, proxyPath, videoOnlyPath)}
                 src={mediaPort ? `http://127.0.0.1:${mediaPort}/file?path=${encodeURIComponent(previewPath(path, proxyPath, videoOnlyPath))}` : undefined}
-                muted={audioReady}
+                muted={audioReady || masterMuted}
                 className="video-player"
                 style={{ maxHeight: `${videoHeight.size}vh` }}
                 onLoadedMetadata={onVideoLoadedMetadata}
