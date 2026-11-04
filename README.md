@@ -124,7 +124,7 @@ separate lint script is configured.
 ## Architecture
 
 For a deeper look at how playback, audio mixing, export, and storage sync are
-wired together, see [`CLAUDE.md`](CLAUDE.md) — it documents the Rust module
+wired together, see [`AGENTS.md`](AGENTS.md) — it documents the Rust module
 layout (`src-tauri/src/`), the frontend structure (`src/`), and the reasoning
 behind some of the less obvious design decisions (e.g. why playback goes through
 an HTTP server, why audio never uses `<audio>`/`<video>` elements directly).
