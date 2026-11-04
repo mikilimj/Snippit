@@ -1308,13 +1308,16 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   flex-wrap: wrap;
   gap: 14px;
   align-content: flex-start;
-  justify-content: center;
+  /* Never centre: a short last row has to line up with the rows above it. */
+  justify-content: flex-start;
 }
 
 .grid-card {
-  flex: 1 1 260px;
-  max-width: 360px;
-  min-width: 220px;
+  /* Fixed width, no growth: with `flex: 1 1 …` the cards on a short last row
+     stretched to fill the row and looked bigger than every other row. */
+  flex: 0 1 260px;
+  max-width: 260px;
+  min-width: 0;
   border-radius: var(--radius-md);
   overflow: hidden;
   background: var(--panel-raised);
