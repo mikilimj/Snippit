@@ -11,7 +11,7 @@
 
 <p align="center">
   <a href="https://github.com/mikilimj/Snippit/actions/workflows/build.yml"><img src="https://img.shields.io/github/actions/workflow/status/mikilimj/Snippit/build.yml" alt="Build status"></a>
-  <img src="https://img.shields.io/badge/version-1.2.0-blue" alt="Version">
+  <img src="https://img.shields.io/badge/version-1.3.0-blue" alt="Version">
   <img src="https://img.shields.io/badge/platforms-Linux%20%7C%20Windows-lightgrey" alt="Platforms">
 </p>
 
