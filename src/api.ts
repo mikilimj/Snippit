@@ -76,6 +76,14 @@ export function removeFromLibrary(id: number): Promise<void> {
 }
 
 /**
+ * Delete a clip's source file from disk and drop it from the library index.
+ * The UI owns the confirmation; this is the destructive half of "delete clip".
+ */
+export function deleteClipFile(path: string): Promise<void> {
+  return invoke<void>("delete_clip_file", { path });
+}
+
+/**
  * Re-scan the configured watched folders for clips added since launch. Newly
  * indexed clips are delivered asynchronously via `clip-added` events.
  */
