@@ -84,14 +84,18 @@ into one output stream (video stream-copied, audio re-encoded to AAC).
   mousedown on the backdrop, or `Escape`.
 - `LibraryGrid.tsx` / `FolderRail.tsx` / `ClipCardActions.tsx` — the clip grid
   (cards, folder chips, inline rename, per-card favorite/folder/remove actions)
-- `PlayerControls.tsx` — the single transport bar (play/pause, scrub, time
-  readout, master preview volume). The `<video>` is rendered *without* native
-  `controls` on purpose, so nothing overlays the picture on hover. Its master
-  volume is the master `GainNode` in `audioEngine.ts` and is preview-only —
-  export still mixes the per-track configs.
-- `Timeline.tsx` — dual-handle trim slider; it starts out spanning the whole clip
-  and dragging a handle seeks the video to that time in real time. The `I`/`O`
-  keys still mark points at the playhead.
+- `PlayerControls.tsx` — the transport buttons under the timetable: play/pause,
+  position readout, mute + master preview volume and fullscreen. The `<video>` is
+  rendered *without* native `controls` on purpose, so nothing overlays the picture
+  on hover; clicking the picture itself toggles playback. Its master volume is the
+  master `GainNode` in `audioEngine.ts` and is preview-only — export still mixes
+  the per-track configs.
+- `Timeline.tsx` — the clip's single timetable, directly under the picture: the bar
+  scrubs the playhead and the two handles are the trim points (defaulting to the
+  whole clip), dragging a handle seeking the video to that time in real time. The
+  `I`/`O` keys still mark points at the playhead.
+- `useVideoClock.ts` — the shared rAF playhead read (Timeline + PlayerControls);
+  keeps playback from re-rendering the app and survives source swaps.
 - `FirstRunWizard.tsx` / `SettingsModal.tsx` — onboarding and settings UI
 - `api.ts` — typed wrappers around Tauri `invoke` calls
 - `audioEngine.ts` — the chunked preview-audio engine (fetch/decode/schedule on the
