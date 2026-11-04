@@ -41,6 +41,8 @@ function App() {
   const [proxyPath, setProxyPath] = useState<string | null>(null);
   const [proxyStatus, setProxyStatus] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
+  // The player block (picture + timetable + transport) — the fullscreen target.
+  const playerShellRef = useRef<HTMLDivElement>(null);
   const [inPoint, setInPoint] = useState<number | null>(null);
   const [outPoint, setOutPoint] = useState<number | null>(null);
   const [status, setStatus] = useState<string | null>(null);
@@ -68,6 +70,10 @@ function App() {
   // Master preview volume/mute: one multiply on top of the per-track mix.
   const [masterVolume, setMasterVolume] = useState(1);
   const [masterMuted, setMasterMuted] = useState(false);
+  // Fullscreen: the DOM Fullscreen API on the player block. `playerExpanded` is
+  // the in-window fallback for WebViews that refuse the request.
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [playerExpanded, setPlayerExpanded] = useState(false);
   const videoHeight = useResizable({
     axis: "y",
     defaultSize: 50,
@@ -485,11 +491,56 @@ function App() {
     if (volume > 0 && masterMuted) setMasterMuted(false);
   }
 
+  // ── Fullscreen ────────────────────────────────────────────────────────────────
+  // Tracks the browser's own fullscreen state so the button's icon flips and
+  // Escape (which the WebView consumes to leave fullscreen) doesn't also close
+  // the popup.
+  useEffect(() => {
+    const onChange = () => setIsFullscreen(document.fullscreenElement === playerShellRef.current);
+    document.addEventListener("fullscreenchange", onChange);
+    return () => document.removeEventListener("fullscreenchange", onChange);
+  }, []);
+
+  async function toggleFullscreen() {
+    const shell = playerShellRef.current;
+    if (!shell) return;
+    if (playerExpanded) {
+      setPlayerExpanded(false);
+      return;
+    }
+    try {
+      if (document.fullscreenElement) {
+        await document.exitFullscreen();
+      } else {
+        await shell.requestFullscreen();
+      }
+    } catch (err) {
+      // Some WebKitGTK builds refuse DOM fullscreen from the app window. Fall
+      // back to expanding the player over the whole window instead of failing.
+      console.error("Fullscreen unavailable, expanding in-window instead:", err);
+      setPlayerExpanded(true);
+    }
+  }
+
+  function leaveFullscreen() {
+    setPlayerExpanded(false);
+    if (document.fullscreenElement) {
+      document.exitFullscreen().catch(() => {});
+    }
+  }
+
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if ((e.target as HTMLElement).tagName === "INPUT") return;
-      if (e.key === "Escape" && path) {
-        closeEditor();
+      if (e.key === "Escape") {
+        // The WebView consumes Escape to leave fullscreen — don't close the
+        // popup on that same keypress.
+        if (document.fullscreenElement) return;
+        if (playerExpanded) {
+          setPlayerExpanded(false);
+          return;
+        }
+        if (path) closeEditor();
         return;
       }
       if (e.key === "i" || e.key === "I") markIn();
@@ -497,7 +548,7 @@ function App() {
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [inPoint, outPoint, meta, path]);
+  }, [inPoint, outPoint, meta, path, playerExpanded]);
 
   function handleSetupComplete(result: SetupResult) {
     setAppRoot(result.rootPath);
@@ -643,6 +694,7 @@ function App() {
   // by path, and React would otherwise let its GStreamer pipeline linger), then
   // drop the clip so the popup unmounts and the grid is all that's left.
   function closeEditor() {
+    leaveFullscreen();
     const v = videoRef.current;
     if (v) {
       v.pause();
@@ -970,48 +1022,71 @@ function App() {
             <div className="clip-modal-body">
               {error && <div className="msg-error">{error}</div>}
 
-              {/* Video: original first, proxy fallback (§4.4), then the video-only
-                  remux once the audio engine has taken over; muted in the interim */}
-              <video
-                ref={videoRef}
-                key={previewPath(path, proxyPath, videoOnlyPath)}
-                src={mediaPort ? `http://127.0.0.1:${mediaPort}/file?path=${encodeURIComponent(previewPath(path, proxyPath, videoOnlyPath))}` : undefined}
-                muted={audioReady || masterMuted}
-                className="video-player"
-                style={{ maxHeight: `${videoHeight.size}vh` }}
-                onLoadedMetadata={onVideoLoadedMetadata}
-                onTimeUpdate={onVideoTimeUpdate}
-                onPlay={onVideoPlay}
-                onPlaying={onVideoPlay}
-                onWaiting={onVideoWaiting}
-                onPause={onVideoPause}
-                onEnded={onVideoPause}
-                onSeeked={onVideoSeeked}
-                onVolumeChange={onVideoVolumeChange}
-                onError={handleVideoError}
-              />
-
+              {/* The player block: picture, then the timetable (scrub + trim
+                  handles) directly under it, then the transport buttons. This
+                  whole block is what the fullscreen button expands. */}
               <div
-                className="resize-handle-y"
-                onPointerDown={videoHeight.onPointerDown}
-                onPointerMove={videoHeight.onPointerMove}
-                onPointerUp={videoHeight.onPointerUp}
-                onPointerCancel={videoHeight.onPointerUp}
-              />
+                ref={playerShellRef}
+                className={`player-shell${playerExpanded ? " player-shell-expanded" : ""}`}
+              >
+                {/* Video: original first, proxy fallback (§4.4), then the video-only
+                    remux once the audio engine has taken over; muted in the interim */}
+                <video
+                  ref={videoRef}
+                  key={previewPath(path, proxyPath, videoOnlyPath)}
+                  src={mediaPort ? `http://127.0.0.1:${mediaPort}/file?path=${encodeURIComponent(previewPath(path, proxyPath, videoOnlyPath))}` : undefined}
+                  muted={audioReady || masterMuted}
+                  className="video-player"
+                  draggable={false}
+                  style={{ "--video-max-height": `${videoHeight.size}vh` } as React.CSSProperties}
+                  onClick={togglePlay}
+                  onLoadedMetadata={onVideoLoadedMetadata}
+                  onTimeUpdate={onVideoTimeUpdate}
+                  onPlay={onVideoPlay}
+                  onPlaying={onVideoPlay}
+                  onWaiting={onVideoWaiting}
+                  onPause={onVideoPause}
+                  onEnded={onVideoPause}
+                  onSeeked={onVideoSeeked}
+                  onVolumeChange={onVideoVolumeChange}
+                  onError={handleVideoError}
+                />
 
-              {/* The one and only playback controller — the <video> has no native
-                  controls, so nothing overlays the picture on hover. */}
-              <PlayerControls
-                videoRef={videoRef}
-                duration={meta?.durationSecs ?? 0}
-                playing={playing}
-                onTogglePlay={togglePlay}
-                volume={masterVolume}
-                muted={masterMuted}
-                onVolume={setPreviewVolume}
-                onToggleMute={() => setMasterMuted(m => !m)}
-                onSeek={seekTo}
-              />
+                <div
+                  className="resize-handle-y"
+                  onPointerDown={videoHeight.onPointerDown}
+                  onPointerMove={videoHeight.onPointerMove}
+                  onPointerUp={videoHeight.onPointerUp}
+                  onPointerCancel={videoHeight.onPointerUp}
+                />
+
+                {meta && (
+                  <Timeline
+                    duration={meta.durationSecs}
+                    videoRef={videoRef}
+                    inPoint={inPoint}
+                    outPoint={outPoint}
+                    onChangeIn={changeIn}
+                    onChangeOut={changeOut}
+                    onSeek={seekTo}
+                  />
+                )}
+
+                {/* No native controls on the <video>: this bar is the only
+                    transport, so nothing overlays the picture on hover. */}
+                <PlayerControls
+                  videoRef={videoRef}
+                  duration={meta?.durationSecs ?? 0}
+                  playing={playing}
+                  onTogglePlay={togglePlay}
+                  volume={masterVolume}
+                  muted={masterMuted}
+                  onVolume={setPreviewVolume}
+                  onToggleMute={() => setMasterMuted(m => !m)}
+                  fullscreen={isFullscreen || playerExpanded}
+                  onToggleFullscreen={toggleFullscreen}
+                />
+              </div>
 
               {proxyStatus && (
                 <div className="msg-warn" data-testid="proxy-status">
@@ -1078,29 +1153,13 @@ function App() {
                 </div>
               )}
 
-              {meta && (
-                <div className="trim-section">
-                  <div className="trim-header">
-                    <span className="audio-panel-title">Trim</span>
-                    <span className="trim-readout">
-                      {inPoint !== null ? inPoint.toFixed(2) + "s" : "—"} → {outPoint !== null ? outPoint.toFixed(2) + "s" : "—"}
-                      {inPoint !== null && outPoint !== null
-                        ? ` · ${(outPoint - inPoint).toFixed(2)}s`
-                        : ""}
-                    </span>
-                  </div>
-                  <Timeline
-                    duration={meta.durationSecs}
-                    videoRef={videoRef}
-                    inPoint={inPoint}
-                    outPoint={outPoint}
-                    onChangeIn={changeIn}
-                    onChangeOut={changeOut}
-                  />
-                </div>
-              )}
-
               <div className="trim-controls" data-testid="trim-controls">
+                <span className="trim-readout">
+                  {inPoint !== null ? inPoint.toFixed(2) + "s" : "—"} → {outPoint !== null ? outPoint.toFixed(2) + "s" : "—"}
+                  {inPoint !== null && outPoint !== null
+                    ? ` · ${(outPoint - inPoint).toFixed(2)}s`
+                    : ""}
+                </span>
                 <label className="export-size">
                   <span className="export-size-label">Size</span>
                   <select

@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
+import { useRef, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
 import { formatTimecode } from "./timecode";
+import { useVideoClock } from "./useVideoClock";
 
 interface Props {
   duration: number;
@@ -9,51 +10,36 @@ interface Props {
   /** Raw pointer position as a time; the caller clamps it against the other handle. */
   onChangeIn: (time: number) => void;
   onChangeOut: (time: number) => void;
+  onSeek: (time: number) => void;
 }
 
 /**
- * Dual-handle trim slider. It starts out spanning the whole clip (a missing
- * point means the corresponding clip edge). Dragging either handle moves the
- * playhead to that exact time as you go, so the picture follows the cut in real
- * time — there are no separate "set in/out" buttons.
+ * The clip's timetable, sitting directly under the player: the bar itself is
+ * the scrub area for the playhead, and the two handles on it are the trim
+ * points. Dragging a handle moves the playhead to that exact time as you go, so
+ * the picture follows the cut in real time. There are no separate in/out
+ * buttons, and no second scrub bar anywhere else.
  */
-export function Timeline({ duration, videoRef, inPoint, outPoint, onChangeIn, onChangeOut }: Props) {
+export function Timeline({
+  duration,
+  videoRef,
+  inPoint,
+  outPoint,
+  onChangeIn,
+  onChangeOut,
+  onSeek,
+}: Props) {
   const barRef = useRef<HTMLDivElement>(null);
-  const dragRef = useRef<"in" | "out" | null>(null);
-
-  // The playhead follows the video clock via rAF and stays local to this small
-  // component — the app must not re-render on every video timeupdate. Reading
-  // the ref each frame also survives the <video> element being swapped out for
-  // a proxy. Sub-frame changes bail out via functional setState.
-  const [currentTime, setCurrentTime] = useState(0);
-  useEffect(() => {
-    let raf = 0;
-    const start = () => {
-      raf = requestAnimationFrame(function tick() {
-        const t = videoRef.current?.currentTime ?? 0;
-        setCurrentTime(prev => (Math.abs(t - prev) < 0.03 ? prev : t));
-        raf = requestAnimationFrame(tick);
-      });
-    };
-    const stop = () => cancelAnimationFrame(raf);
-    // Hidden tabs/minimized windows don't need a live playhead; stopping the
-    // loop entirely (rather than relying on browser rAF throttling) avoids
-    // needless wake-ups while backgrounded.
-    const onVisibility = () => (document.hidden ? stop() : start());
-    document.addEventListener("visibilitychange", onVisibility);
-    if (!document.hidden) start();
-    return () => {
-      document.removeEventListener("visibilitychange", onVisibility);
-      stop();
-    };
-  }, [videoRef]);
+  // Which gesture is in flight: scrubbing the playhead, or dragging a handle.
+  const dragRef = useRef<"seek" | "in" | "out" | null>(null);
+  const currentTime = useVideoClock(videoRef);
 
   const inSecs = inPoint ?? 0;
   const outSecs = outPoint ?? duration;
   const toPct = (t: number) => (duration > 0 ? (t / duration) * 100 : 0);
 
   // Pointer x → time on the clip. Pointer capture keeps the events coming from
-  // the handle even when the pointer runs off the bar mid-drag.
+  // the grabbed element even when the pointer runs off the bar mid-drag.
   function timeAt(clientX: number): number {
     const bar = barRef.current;
     if (!bar || duration <= 0) return 0;
@@ -71,9 +57,10 @@ export function Timeline({ duration, videoRef, inPoint, outPoint, onChangeIn, on
   function onHandleDown(which: "in" | "out") {
     return (e: ReactPointerEvent<HTMLDivElement>) => {
       if (duration <= 0) return;
+      // Handles sit on the scrub surface — don't let this also start a scrub.
+      e.stopPropagation();
       dragRef.current = which;
-      // Scrubbing a cut point shouldn't fight audio playback: park the video so
-      // a handle drag stays a plain scrub.
+      // Trimming shouldn't fight playback: park the video so the drag is a scrub.
       videoRef.current?.pause();
       e.currentTarget.setPointerCapture(e.pointerId);
       emit(which, e.clientX);
@@ -88,6 +75,26 @@ export function Timeline({ duration, videoRef, inPoint, outPoint, onChangeIn, on
   }
 
   function onHandleUp(e: ReactPointerEvent<HTMLDivElement>) {
+    dragRef.current = null;
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    }
+  }
+
+  function onBarDown(e: ReactPointerEvent<HTMLDivElement>) {
+    if (duration <= 0) return;
+    dragRef.current = "seek";
+    e.currentTarget.setPointerCapture(e.pointerId);
+    onSeek(timeAt(e.clientX));
+  }
+
+  function onBarMove(e: ReactPointerEvent<HTMLDivElement>) {
+    if (dragRef.current !== "seek") return;
+    onSeek(timeAt(e.clientX));
+  }
+
+  function onBarUp(e: ReactPointerEvent<HTMLDivElement>) {
+    if (dragRef.current !== "seek") return;
     dragRef.current = null;
     if (e.currentTarget.hasPointerCapture(e.pointerId)) {
       e.currentTarget.releasePointerCapture(e.pointerId);
@@ -109,9 +116,36 @@ export function Timeline({ duration, videoRef, inPoint, outPoint, onChangeIn, on
   });
 
   return (
-    <div ref={barRef} className="tl-bar">
+    <div
+      ref={barRef}
+      className="tl-bar"
+      role="slider"
+      tabIndex={0}
+      aria-label="Playback position and trim points"
+      aria-valuemin={0}
+      aria-valuemax={Math.round(duration)}
+      aria-valuenow={Number(currentTime.toFixed(1))}
+      onPointerDown={onBarDown}
+      onPointerMove={onBarMove}
+      onPointerUp={onBarUp}
+      onPointerCancel={onBarUp}
+      onKeyDown={e => {
+        // Arrow keys nudge the playhead by a second, Home/End jump to the ends.
+        if (duration <= 0) return;
+        const step = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
+        if (step !== 0) {
+          e.preventDefault();
+          onSeek(Math.max(0, Math.min(duration, currentTime + step)));
+        } else if (e.key === "Home" || e.key === "End") {
+          e.preventDefault();
+          onSeek(e.key === "Home" ? 0 : duration);
+        }
+      }}
+    >
       <div className="tl-track" />
 
+      {/* How much of the clip has been played, then the kept in→out range. */}
+      <div className="tl-played" style={{ width: `${toPct(currentTime)}%` }} />
       <div
         className="tl-range"
         style={{ left: `${toPct(inSecs)}%`, width: `${toPct(outSecs) - toPct(inSecs)}%` }}
@@ -128,6 +162,7 @@ export function Timeline({ duration, videoRef, inPoint, outPoint, onChangeIn, on
       </div>
 
       <div className="tl-cursor" style={{ left: `${toPct(currentTime)}%` }} />
+      <div className="tl-thumb" style={{ left: `${toPct(currentTime)}%` }} />
 
       <span className="tl-time tl-time-left">{formatTimecode(inSecs)}</span>
       <span className="tl-time tl-time-right">{formatTimecode(outSecs)}</span>
