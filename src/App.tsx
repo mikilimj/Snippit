@@ -1055,7 +1055,7 @@ function App() {
             className="clip-modal"
             role="dialog"
             aria-modal="true"
-            aria-label={`Editing ${basename(path)}`}
+            aria-label={`Editing ${openName}`}
             onMouseDown={e => e.stopPropagation()}
           >
             <div className="clip-modal-header">
