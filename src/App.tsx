@@ -4,7 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { probeClip, exportTrim, exportCompressed, cancelExport, prepareAudioTracks, prepareVideoOnly, getAppRoot, addToLibrary, listLibrary, removeFromLibrary, rescanLibrary, setClipFavorite, renameLibraryClip, createFolder, listFolders, deleteFolder, addClipToFolder, removeClipFromFolder, listClipsInFolder, listUnsortedLibrary, ensureProxy, storageStatus, storageSyncedRelNames, storageDeleteRemote, type ClipMeta, type ClipRow, type ExportMode, type ExportProgress, type Folder, type TrackConfig, type SetupResult } from "./api";
 import { exportSequence, type MusicOverlay } from "./api";
-import { newClipBelongsInView, applyFavorite, applyRename, upsertByCapture, captureLabel, type LibraryView } from "./libraryView";
+import { newClipBelongsInView, applyFavorite, applyRename, upsertByCapture, type LibraryView } from "./libraryView";
 import { previewPath, shouldTryProxy } from "./preview";
 import { ChunkedAudioEngine } from "./audioEngine";
 import { moveSegment, removeSegment, sequenceDuration, toBackendSegments, type SequenceSegment } from "./sequence";
@@ -15,10 +15,7 @@ import { useResizable } from "./useResizable";
 import { FirstRunWizard } from "./FirstRunWizard";
 import { SettingsModal } from "./SettingsModal";
 import { SyncDiffModal } from "./SyncDiffModal";
-import FolderRail from "./FolderRail";
-import ClipCardActions from "./ClipCardActions";
 import LibraryGrid from "./LibraryGrid";
-import logo from "./assets/logo.png";
 import "./App.css";
 
 function basename(p: string) {
@@ -32,14 +29,6 @@ function clipRelName(appRoot: string | null | undefined, path: string): string |
   const norm = path.replace(/\\/g, "/");
   const prefix = `${appRoot.replace(/\\/g, "/").replace(/\/$/, "")}/Clips/`;
   return norm.startsWith(prefix) ? norm.slice(prefix.length) : null;
-}
-
-// The capture date in a sidebar row's meta line, computed once per render. Stays
-// quiet for clips whose container carried no capture metadata: the library then
-// sorts them by file mtime, which would be the copy date, not a recording date.
-function CaptureDate({ row }: { row: ClipRow }) {
-  const label = captureLabel(row);
-  return label ? <>{label} · </> : null;
 }
 
 function App() {
@@ -57,11 +46,8 @@ function App() {
   const [library, setLibrary] = useState<ClipRow[]>([]);
   const [folders, setFolders] = useState<Folder[]>([]);
   const [activeView, setActiveView] = useState<LibraryView>({ kind: "all" });
-  const [viewMode, setViewMode] = useState<"sidebar" | "grid">("sidebar");
   const [creatingFolder, setCreatingFolder] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
-  const [editingId, setEditingId] = useState<number | null>(null);
-  const [editingName, setEditingName] = useState("");
   const [mediaPort, setMediaPort] = useState<number | null>(null);
   const [sizeSelection, setSizeSelection] = useState("original");
   const [customMb, setCustomMb] = useState("");
@@ -75,13 +61,6 @@ function App() {
   const [diffOpen, setDiffOpen] = useState(false);
   const [storageProvider, setStorageProvider] = useState<string | null>(null);
   const [syncedRels, setSyncedRels] = useState<Set<string>>(new Set());
-  const sidebar = useResizable({
-    axis: "x",
-    defaultSize: 224,
-    min: 184,
-    max: 480,
-    storageKey: "snippit:sidebarWidth",
-  });
   const videoHeight = useResizable({
     axis: "y",
     defaultSize: 50,
@@ -113,8 +92,6 @@ function App() {
   const restoreAfterSwapRef = useRef<{ time: number; paused: boolean } | null>(null);
   // A video-only remux that failed to play is never retried for this clip.
   const videoOnlyFailedRef = useRef(false);
-  // Set when the user hits Escape so the imminent blur cancels instead of commits.
-  const renameCancelRef = useRef(false);
 
   // Keep the ref in sync so Web Audio effects can read current config
   useEffect(() => {
@@ -299,15 +276,6 @@ function App() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [audioTrackPaths]);
 
-  // ── Stop preview audio when the editor leaves the screen ──────────────────────
-  // Grid view returns a different tree, so the <video> unmounts without ever
-  // firing pause — React strips its listeners on the way out. Sources already
-  // scheduled on the AudioContext would keep playing on the audio thread for up
-  // to a full chunk, so pause the engine explicitly on the transition.
-  useEffect(() => {
-    if (viewMode === "grid") engineRef.current?.pause();
-  }, [viewMode]);
-
   // ── Sync the engine when video plays / pauses / seeks ─────────────────────────
   function onVideoPlay() {
     const v = videoRef.current;
@@ -466,12 +434,16 @@ function App() {
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if ((e.target as HTMLElement).tagName === "INPUT") return;
+      if (e.key === "Escape" && path) {
+        closeEditor();
+        return;
+      }
       if (e.key === "i" || e.key === "I") markIn();
       if (e.key === "o" || e.key === "O") markOut();
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [inPoint, outPoint, meta]);
+  }, [inPoint, outPoint, meta, path]);
 
   function handleSetupComplete(result: SetupResult) {
     setAppRoot(result.rootPath);
@@ -589,23 +561,13 @@ function App() {
   }
 
   // ── Open clip ─────────────────────────────────────────────────────────────────
-  async function openClip(p: string) {
-    // The <video> is keyed by path, so React replaces the element — but the old
-    // element's GStreamer pipeline (and its HTTP connection) would linger until
-    // GC. Kill it now, same reasoning as teardownAudio. Skipped when re-opening
-    // the active clip: the key doesn't change, so the element lives on.
-    const v = videoRef.current;
-    if (v && p !== path) {
-      v.pause();
-      v.removeAttribute("src");
-      v.load();
-    }
-
+  // Everything transient about the open clip lives here so the popup can be
+  // opened and closed without leaking preview/audio state into the next clip.
+  function resetPreview() {
     setError(null);
     setVideoError(null);
     setProxyPath(null);
     setProxyStatus(null);
-    setPath(p);
     setInPoint(null);
     setOutPoint(null);
     setStatus(null);
@@ -620,10 +582,46 @@ function App() {
     videoOnlyFailedRef.current = false;
     restoreAfterSwapRef.current = null;
     teardownAudio();
+  }
+
+  // Close the player popup: kill the media pipeline first (the <video> is keyed
+  // by path, and React would otherwise let its GStreamer pipeline linger), then
+  // drop the clip so the popup unmounts and the grid is all that's left.
+  function closeEditor() {
+    const v = videoRef.current;
+    if (v) {
+      v.pause();
+      v.removeAttribute("src");
+      v.load();
+    }
+    resetPreview();
+    setPath(null);
+    setMeta(null);
+  }
+
+  async function openClip(p: string) {
+    // The <video> is keyed by path, so React replaces the element — but the old
+    // element's GStreamer pipeline (and its HTTP connection) would linger until
+    // GC. Kill it now, same reasoning as teardownAudio. Skipped when re-opening
+    // the active clip: the key doesn't change, so the element lives on.
+    const v = videoRef.current;
+    if (v && p !== path) {
+      v.pause();
+      v.removeAttribute("src");
+      v.load();
+    }
+
+    resetPreview();
+    setPath(p);
+    setMeta(null);
 
     try {
       const m = await probeClip(p);
       setMeta(m);
+      // The trim slider starts out covering the whole clip: from the very first
+      // frame to the very last one.
+      setInPoint(0);
+      setOutPoint(m.durationSecs);
       // Persist to the library index; fall back to an in-session row if the
       // write fails so the clip still shows in the sidebar. A just-opened clip
       // is unsorted, so it only appears in views that show new clips.
@@ -743,26 +741,6 @@ function App() {
     }
   }
 
-  function startRename(e: React.MouseEvent, entry: ClipRow) {
-    e.stopPropagation();
-    renameCancelRef.current = false;
-    setEditingId(entry.id);
-    setEditingName(entry.displayName);
-  }
-
-  async function commitRename() {
-    if (renameCancelRef.current) {
-      renameCancelRef.current = false;
-      return; // Escape was pressed — discard the edit.
-    }
-    const id = editingId;
-    if (id === null) return;
-    const name = editingName.trim();
-    setEditingId(null);
-    if (!name) return;
-    doRename(id, name);
-  }
-
   async function doRename(id: number, name: string) {
     setLibrary(prev => applyRename(prev, id, name));
     if (id < 0) return;
@@ -842,7 +820,7 @@ function App() {
     }
   }
 
-  // ── Render ────────────────────────────────────────────────────────────────────
+  // ── Render ──────────────────────────────────────────────────────────────────
   if (appRoot === undefined) {
     return null;
   }
@@ -851,60 +829,12 @@ function App() {
     return <FirstRunWizard onComplete={handleSetupComplete} />;
   }
 
-  if (viewMode === "grid") {
-    return (
-      <>
-        {settingsOpen && (
-          <SettingsModal
-            onClose={() => setSettingsOpen(false)}
-            onOpenDiff={() => {
-              setSettingsOpen(false);
-              setDiffOpen(true);
-            }}
-          />
-        )}
-        {diffOpen && (
-          <SyncDiffModal
-            onClose={() => setDiffOpen(false)}
-            onImported={() => loadView(activeView)}
-            library={library}
-            mediaPort={mediaPort}
-          />
-        )}
-        <LibraryGrid
-          library={library}
-          folders={folders}
-          activeView={activeView}
-          onSelectView={setActiveView}
-          onDeleteFolder={deleteFolderClick}
-          creatingFolder={creatingFolder}
-          newFolderName={newFolderName}
-          onNewFolderNameChange={setNewFolderName}
-          onCreateFolder={createFolderClick}
-          onCancelCreateFolder={cancelFolderCreation}
-          onStartCreateFolder={() => setCreatingFolder(true)}
-          onOpenClip={openClip}
-          onToggleFavorite={toggleFavorite}
-          onAddToFolder={addToFolder}
-          onRemoveFromLibrary={removeFromLibraryClick}
-          onRemoveFromCurrentFolder={removeFromCurrentFolder}
-          onRenameClip={handleGridRename}
-          onDeleteFromServer={deleteFromServer}
-          mediaPort={mediaPort}
-          storageProvider={storageProvider}
-          syncedRels={syncedRels}
-          appRoot={appRoot}
-          onRescan={() => rescanLibrary().catch(err => console.error("Rescan failed:", err))}
-          onSettings={() => setSettingsOpen(true)}
-          onPickClip={pickClip}
-          onBackToEditor={() => setViewMode("sidebar")}
-        />
-      </>
-    );
-  }
-
+  // The grid is the whole app; a clip opens in a floating editor popup on top of
+  // it. Both the "x" in the popup header and a click on the backdrop (the empty
+  // space around the card) close it — the header's mousedown is stopped so a
+  // drag that starts inside never registers as an outside click.
   return (
-    <div className="app-layout">
+    <>
       {settingsOpen && (
         <SettingsModal
           onClose={() => setSettingsOpen(false)}
@@ -922,470 +852,374 @@ function App() {
           mediaPort={mediaPort}
         />
       )}
-      {/* Library sidebar */}
-      <aside className="library-panel" style={{ width: sidebar.size }}>
-        <div className="brand-row">
-          <img className="brand-logo" src={logo} alt="" />
-          <span className="brand-name">Snippit</span>
-        </div>
-        <div className="library-header">
-          <span className="library-title">Library</span>
-          <div className="library-header-actions">
-            <button
-              className="btn-sm"
-              title="Grid view"
-              onClick={() => setViewMode("grid")}
-            >
-              ⧉
-            </button>
-            <button
-              className="btn-sm"
-              title="Re-scan watched folders"
-              onClick={() => rescanLibrary().catch(err => console.error("Rescan failed:", err))}
-            >
-              ⟳
-            </button>
-            <button className="btn-sm" title="Settings" onClick={() => setSettingsOpen(true)}>
-              ⚙
-            </button>
-            <button className="btn-sm" onClick={pickClip}>+ Open</button>
-          </div>
-        </div>
-        <FolderRail
-          folders={folders}
-          activeView={activeView}
-          onSelectView={setActiveView}
-          onDeleteFolder={deleteFolderClick}
-          creatingFolder={creatingFolder}
-          newFolderName={newFolderName}
-          onNewFolderNameChange={setNewFolderName}
-          onCreateFolder={createFolderClick}
-          onCancelCreateFolder={cancelFolderCreation}
-          onStartCreateFolder={() => setCreatingFolder(true)}
-        />
-        {library.length === 0 ? (
-          <p className="library-empty">
-            {activeView.kind === "all"
-              ? "Open a clip to add it here."
-              : activeView.kind === "favorites"
-                ? "No favorites yet — tap ☆ on a clip."
-                : activeView.kind === "unsorted"
-                  ? "Nothing unsorted — every clip is filed away."
-                  : "No clips in this folder yet."}
-          </p>
-        ) : (
-          <ul className="library-list">
-            {library.map(entry => (
-              <li
-                key={entry.id}
-                className={`library-item${entry.path === path ? " active" : ""}`}
-                onClick={() => openClip(entry.path)}
-                title={entry.path}
-              >
-                {entry.thumbnailPath && mediaPort ? (
-                  <img
-                    className="library-thumb"
-                    src={`http://127.0.0.1:${mediaPort}/file?path=${encodeURIComponent(entry.thumbnailPath)}`}
-                    alt=""
-                    loading="lazy"
-                  />
-                ) : (
-                  <div className="library-thumb library-thumb-empty" />
-                )}
-                <div className="library-item-text">
-                  {editingId === entry.id ? (
-                    <input
-                      className="library-rename-input"
-                      autoFocus
-                      value={editingName}
-                      onClick={e => e.stopPropagation()}
-                      onChange={e => setEditingName(e.target.value)}
-                      onKeyDown={e => {
-                        if (e.key === "Enter") commitRename();
-                        if (e.key === "Escape") {
-                          renameCancelRef.current = true;
-                          setEditingId(null);
-                        }
-                      }}
-                      onBlur={commitRename}
-                    />
-                  ) : (
-                    <span
-                      className="library-name"
-                      title="Double-click to rename"
-                      onDoubleClick={e => startRename(e, entry)}
-                    >
-                      {entry.displayName}
-                    </span>
-                  )}
-                  <span className="library-meta">
-                    {entry.favorite && <span className="fav-inline">★ </span>}
-                    {/* The library sorts by capture date, so showing it makes the
-                        order legible. Clips whose container carries no capture
-                        metadata show nothing rather than a misleading mtime. */}
-                    <CaptureDate row={entry} />
-                    {entry.durationSecs.toFixed(1)}s · {entry.width}×{entry.height}
-                  </span>
-                </div>
-                <ClipCardActions
-                    entry={entry}
-                    activeView={activeView}
-                    folders={folders}
-                    storageProvider={storageProvider}
-                    syncedToServer={syncedRels.has(clipRelName(appRoot, entry.path) ?? "")}
-                    onToggleFavorite={toggleFavorite}
-                    onAddToFolder={addToFolder}
-                    onRemoveFromLibrary={removeFromLibraryClick}
-                    onRemoveFromCurrentFolder={removeFromCurrentFolder}
-                    onDeleteFromServer={deleteFromServer}
-                  />
-              </li>
-            ))}
-          </ul>
-        )}
-      </aside>
-
-      <div
-        className="resize-handle-x"
-        onPointerDown={sidebar.onPointerDown}
-        onPointerMove={sidebar.onPointerMove}
-        onPointerUp={sidebar.onPointerUp}
-        onPointerCancel={sidebar.onPointerUp}
+      <LibraryGrid
+        library={library}
+        folders={folders}
+        activeView={activeView}
+        onSelectView={setActiveView}
+        onDeleteFolder={deleteFolderClick}
+        creatingFolder={creatingFolder}
+        newFolderName={newFolderName}
+        onNewFolderNameChange={setNewFolderName}
+        onCreateFolder={createFolderClick}
+        onCancelCreateFolder={cancelFolderCreation}
+        onStartCreateFolder={() => setCreatingFolder(true)}
+        onOpenClip={openClip}
+        onToggleFavorite={toggleFavorite}
+        onAddToFolder={addToFolder}
+        onRemoveFromLibrary={removeFromLibraryClick}
+        onRemoveFromCurrentFolder={removeFromCurrentFolder}
+        onRenameClip={handleGridRename}
+        onDeleteFromServer={deleteFromServer}
+        mediaPort={mediaPort}
+        storageProvider={storageProvider}
+        syncedRels={syncedRels}
+        appRoot={appRoot}
+        onRescan={() => rescanLibrary().catch(err => console.error("Rescan failed:", err))}
+        onSettings={() => setSettingsOpen(true)}
+        onPickClip={pickClip}
       />
 
-      {/* Editor area */}
-      <main className="editor-panel">
-        {!path && (
-          <div className="empty-state">
-            <div className="aurora-blob aurora-blob-1" />
-            <div className="aurora-blob aurora-blob-2" />
-            <div className="aurora-blob aurora-blob-3" />
-            <div className="empty-card">
-              <img className="empty-logo" src={logo} alt="" />
-              <h1>Snippit</h1>
-              <p>Open a clip, trim it, share it — in seconds.</p>
-              <button className="btn-export" onClick={pickClip}>Open a clip</button>
+      {path && (
+        <div
+          className="clip-modal-backdrop"
+          onMouseDown={e => {
+            if (e.target === e.currentTarget) closeEditor();
+          }}
+        >
+          <div
+            className="clip-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label={`Editing ${basename(path)}`}
+            onMouseDown={e => e.stopPropagation()}
+          >
+            <div className="clip-modal-header">
+              <div className="clip-info">
+                <span className="clip-name">{basename(path)}</span>
+                {meta && (
+                  <span className="clip-details">
+                    {meta.durationSecs.toFixed(2)}s · {meta.width}×{meta.height} · {meta.videoCodec} · {meta.audioTracks.length}ch
+                  </span>
+                )}
+              </div>
+              <button
+                className="modal-close clip-modal-close"
+                onClick={closeEditor}
+                aria-label="Close player"
+              >
+                ×
+              </button>
             </div>
-          </div>
-        )}
 
-        {error && <div className="msg-error">{error}</div>}
+            <div className="clip-modal-body">
+              {error && <div className="msg-error">{error}</div>}
 
-        {path && meta && (
-          <div className="clip-info">
-            <span className="clip-name">{basename(path)}</span>
-            <span className="clip-details">
-              {meta.durationSecs.toFixed(2)}s · {meta.width}×{meta.height} · {meta.videoCodec} · {meta.audioTracks.length}ch
-            </span>
-          </div>
-        )}
-
-        {path && (
-          <>
-            {/* Video: original first, proxy fallback (§4.4), then the video-only
-                remux once the audio engine has taken over; muted in the interim */}
-            <video
-              ref={videoRef}
-              key={previewPath(path, proxyPath, videoOnlyPath)}
-              src={mediaPort ? `http://127.0.0.1:${mediaPort}/file?path=${encodeURIComponent(previewPath(path, proxyPath, videoOnlyPath))}` : undefined}
-              controls
-              muted={audioReady}
-              className="video-player"
-              style={{ maxHeight: `${videoHeight.size}vh` }}
-              onLoadedMetadata={onVideoLoadedMetadata}
-              onTimeUpdate={onVideoTimeUpdate}
-              onPlay={onVideoPlay}
-              onPlaying={onVideoPlay}
-              onWaiting={onVideoWaiting}
-              onPause={onVideoPause}
-              onSeeked={onVideoSeeked}
-              onVolumeChange={onVideoVolumeChange}
-              onError={handleVideoError}
-            />
-
-            <div
-              className="resize-handle-y"
-              onPointerDown={videoHeight.onPointerDown}
-              onPointerMove={videoHeight.onPointerMove}
-              onPointerUp={videoHeight.onPointerUp}
-              onPointerCancel={videoHeight.onPointerUp}
-            />
-
-            {proxyStatus && (
-              <div className="msg-warn" data-testid="proxy-status">
-                {proxyStatus}
-              </div>
-            )}
-
-            {proxyPath && !proxyStatus && (
-              <div className="msg-ok">
-                Playing a 720p preview proxy. Export still uses the full-quality original.
-              </div>
-            )}
-
-            {videoError && (
-              <div className="msg-warn">
-                <strong>Video won't play:</strong> {videoError}
-              </div>
-            )}
-
-            {/* Audio tracks panel */}
-            {meta && meta.audioTracks.length > 0 && (
-              <div className="audio-panel">
-                <div className="audio-panel-header">
-                  <span className="audio-panel-title">Audio Tracks</span>
-                  {audioPreparingMsg && (
-                    <span className="audio-preparing">{audioPreparingMsg}</span>
-                  )}
-                </div>
-                {trackConfigs.map((cfg, i) => {
-                  const track = meta.audioTracks[i];
-                  if (!track) return null;
-                  const label = track.language
-                    ? `Track ${i + 1} (${track.language})`
-                    : `Track ${i + 1}`;
-                  return (
-                    <div key={cfg.streamIndex} className={`audio-track-row${cfg.enabled ? "" : " muted"}`}>
-                      <label className="audio-track-label">
-                        <input
-                          type="checkbox"
-                          checked={cfg.enabled}
-                          onChange={e => updateTrackConfig(i, { enabled: e.target.checked })}
-                        />
-                        <span className="audio-track-name">{label}</span>
-                        <span className="audio-track-meta">{track.codec} · {track.channels}ch</span>
-                      </label>
-                      <div className="audio-track-volume">
-                        <input
-                          type="range"
-                          min={0}
-                          max={200}
-                          step={1}
-                          value={Math.round(cfg.volume * 100)}
-                          disabled={!cfg.enabled}
-                          onChange={e => updateTrackConfig(i, { volume: parseInt(e.target.value) / 100 })}
-                          className="audio-volume-slider"
-                        />
-                        <span className="audio-volume-pct">
-                          {cfg.enabled ? `${Math.round(cfg.volume * 100)}%` : "—"}
-                        </span>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-
-            {meta && (
-              <Timeline
-                duration={meta.durationSecs}
-                videoRef={videoRef}
-                inPoint={inPoint}
-                outPoint={outPoint}
-                onSeek={seekTo}
+              {/* Video: original first, proxy fallback (§4.4), then the video-only
+                  remux once the audio engine has taken over; muted in the interim */}
+              <video
+                ref={videoRef}
+                key={previewPath(path, proxyPath, videoOnlyPath)}
+                src={mediaPort ? `http://127.0.0.1:${mediaPort}/file?path=${encodeURIComponent(previewPath(path, proxyPath, videoOnlyPath))}` : undefined}
+                controls
+                muted={audioReady}
+                className="video-player"
+                style={{ maxHeight: `${videoHeight.size}vh` }}
+                onLoadedMetadata={onVideoLoadedMetadata}
+                onTimeUpdate={onVideoTimeUpdate}
+                onPlay={onVideoPlay}
+                onPlaying={onVideoPlay}
+                onWaiting={onVideoWaiting}
+                onPause={onVideoPause}
+                onSeeked={onVideoSeeked}
+                onVolumeChange={onVideoVolumeChange}
+                onError={handleVideoError}
               />
-            )}
 
-            <div className="trim-controls" data-testid="trim-controls">
-              <button onClick={markIn}>Set In (I)</button>
-              <span className="trim-readout">
-                {inPoint !== null ? inPoint.toFixed(2) + "s" : "—"} → {outPoint !== null ? outPoint.toFixed(2) + "s" : "—"}
-              </span>
-              <button onClick={markOut}>Set Out (O)</button>
-              <label className="export-size">
-                <span className="export-size-label">Size</span>
-                <select
-                  value={sizeSelection}
-                  onChange={e => setSizeSelection(e.target.value)}
-                  className="export-size-select"
-                >
-                  <option value="original">Original quality</option>
-                  {TARGET_SIZE_PRESETS.map(mb => (
-                    <option key={mb} value={String(mb)}>{mb} MB{mb === 8 ? " (Discord)" : ""}</option>
-                  ))}
-                  <option value="custom">Custom…</option>
-                </select>
-              </label>
-              {sizeSelection === "custom" && (
-                <input
-                  type="number"
-                  min={1}
-                  step={1}
-                  placeholder="MB"
-                  value={customMb}
-                  onChange={e => setCustomMb(e.target.value)}
-                  className="export-size-custom"
+              <div
+                className="resize-handle-y"
+                onPointerDown={videoHeight.onPointerDown}
+                onPointerMove={videoHeight.onPointerMove}
+                onPointerUp={videoHeight.onPointerUp}
+                onPointerCancel={videoHeight.onPointerUp}
+              />
+
+              {proxyStatus && (
+                <div className="msg-warn" data-testid="proxy-status">
+                  {proxyStatus}
+                </div>
+              )}
+
+              {proxyPath && !proxyStatus && (
+                <div className="msg-ok">
+                  Playing a 720p preview proxy. Export still uses the full-quality original.
+                </div>
+              )}
+
+              {videoError && (
+                <div className="msg-warn">
+                  <strong>Video won't play:</strong> {videoError}
+                </div>
+              )}
+
+              {/* Audio tracks panel */}
+              {meta && meta.audioTracks.length > 0 && (
+                <div className="audio-panel">
+                  <div className="audio-panel-header">
+                    <span className="audio-panel-title">Audio Tracks</span>
+                    {audioPreparingMsg && (
+                      <span className="audio-preparing">{audioPreparingMsg}</span>
+                    )}
+                  </div>
+                  {trackConfigs.map((cfg, i) => {
+                    const track = meta.audioTracks[i];
+                    if (!track) return null;
+                    const label = track.language
+                      ? `Track ${i + 1} (${track.language})`
+                      : `Track ${i + 1}`;
+                    return (
+                      <div key={cfg.streamIndex} className={`audio-track-row${cfg.enabled ? "" : " muted"}`}>
+                        <label className="audio-track-label">
+                          <input
+                            type="checkbox"
+                            checked={cfg.enabled}
+                            onChange={e => updateTrackConfig(i, { enabled: e.target.checked })}
+                          />
+                          <span className="audio-track-name">{label}</span>
+                          <span className="audio-track-meta">{track.codec} · {track.channels}ch</span>
+                        </label>
+                        <div className="audio-track-volume">
+                          <input
+                            type="range"
+                            min={0}
+                            max={200}
+                            step={1}
+                            value={Math.round(cfg.volume * 100)}
+                            disabled={!cfg.enabled}
+                            onChange={e => updateTrackConfig(i, { volume: parseInt(e.target.value) / 100 })}
+                            className="audio-volume-slider"
+                          />
+                          <span className="audio-volume-pct">
+                            {cfg.enabled ? `${Math.round(cfg.volume * 100)}%` : "—"}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {meta && (
+                <Timeline
+                  duration={meta.durationSecs}
+                  videoRef={videoRef}
+                  inPoint={inPoint}
+                  outPoint={outPoint}
+                  onSeek={seekTo}
                 />
               )}
-              {sizeSelection === "original" && (
+
+              <div className="trim-controls" data-testid="trim-controls">
+                <button onClick={markIn}>Set In (I)</button>
+                <span className="trim-readout">
+                  {inPoint !== null ? inPoint.toFixed(2) + "s" : "—"} → {outPoint !== null ? outPoint.toFixed(2) + "s" : "—"}
+                </span>
+                <button onClick={markOut}>Set Out (O)</button>
                 <label className="export-size">
-                  <span className="export-size-label">Format</span>
+                  <span className="export-size-label">Size</span>
                   <select
-                    value={exportMode}
-                    onChange={e => setExportMode(e.target.value as ExportMode)}
+                    value={sizeSelection}
+                    onChange={e => setSizeSelection(e.target.value)}
                     className="export-size-select"
-                    title="Fast = instant stream copy at keyframes; Compatible = H.264 re-encode for universal playback"
                   >
-                    <option value="fast">Fast (lossless copy)</option>
-                    <option value="compatible">Compatible (H.264)</option>
+                    <option value="original">Original quality</option>
+                    {TARGET_SIZE_PRESETS.map(mb => (
+                      <option key={mb} value={String(mb)}>{mb} MB{mb === 8 ? " (Discord)" : ""}</option>
+                    ))}
+                    <option value="custom">Custom…</option>
                   </select>
                 </label>
-              )}
-              <button className="btn-export" onClick={doExport} disabled={exporting}>
-                {exporting ? "Exporting…" : "Export trim"}
-              </button>
-              {exporting && (
-                <button className="btn-cancel" onClick={cancelExportClick}>Cancel</button>
-              )}
-            </div>
-
-            {/* Light timeline: stitch trimmed clips + optional music (§4.3) */}
-            <div className="sequence-panel">
-              <div className="sequence-header">
-                <span className="sequence-title">Sequence</span>
-                <div className="sequence-actions">
-                  <button
-                    className="btn-sm"
-                    onClick={addToSequence}
-                    disabled={inPoint === null || outPoint === null}
-                    title="Append the current In→Out selection to the sequence"
-                  >
-                    + Add clip
-                  </button>
-                  <button className="btn-sm" onClick={pickMusic} title="Overlay a music track">
-                    ♪ {music ? "Change music" : "Add music"}
-                  </button>
-                </div>
-              </div>
-
-              {segments.length === 0 ? (
-                <p className="sequence-empty">
-                  Trim a clip, then “Add clip” to build a sequence. Straight cuts, played in order.
-                </p>
-              ) : (
-                <>
-                  <ol className="sequence-list">
-                    {segments.map((seg, i) => (
-                      <li key={seg.id} className="sequence-item">
-                        <span className="sequence-index">{i + 1}</span>
-                        <span className="sequence-name" title={seg.path}>{seg.displayName}</span>
-                        <span className="sequence-span">
-                          {seg.inSecs.toFixed(1)}–{seg.outSecs.toFixed(1)}s
-                        </span>
-                        <div className="sequence-item-actions">
-                          <button
-                            className="seq-move"
-                            disabled={i === 0}
-                            onClick={() => setSegments(prev => moveSegment(prev, i, -1))}
-                            title="Move up"
-                            aria-label="Move up"
-                          >
-                            ▲
-                          </button>
-                          <button
-                            className="seq-move"
-                            disabled={i === segments.length - 1}
-                            onClick={() => setSegments(prev => moveSegment(prev, i, 1))}
-                            title="Move down"
-                            aria-label="Move down"
-                          >
-                            ▼
-                          </button>
-                          <button
-                            className="library-remove"
-                            onClick={() => setSegments(prev => removeSegment(prev, seg.id))}
-                            title="Remove from sequence"
-                            aria-label="Remove from sequence"
-                          >
-                            ×
-                          </button>
-                        </div>
-                      </li>
-                    ))}
-                  </ol>
-                  <div className="sequence-total">
-                    Total: {sequenceDuration(segments).toFixed(1)}s
-                  </div>
-                </>
-              )}
-
-              {music && (
-                <div className="music-row">
-                  <span className="music-name" title={music.path}>♪ {basename(music.path)}</span>
-                  <div className="audio-track-volume">
-                    <input
-                      type="range"
-                      min={0}
-                      max={200}
-                      value={Math.round(music.volume * 100)}
-                      onChange={e => updateMusic({ volume: parseInt(e.target.value) / 100 })}
-                      className="audio-volume-slider"
-                    />
-                    <span className="audio-volume-pct">{Math.round(music.volume * 100)}%</span>
-                  </div>
-                  <label className="music-loop">
-                    <input
-                      type="checkbox"
-                      checked={music.loopToLength}
-                      onChange={e => updateMusic({ loopToLength: e.target.checked })}
-                    />
-                    Loop
-                  </label>
-                  <button
-                    className="library-remove"
-                    onClick={() => setMusic(null)}
-                    title="Remove music"
-                    aria-label="Remove music"
-                  >
-                    ×
-                  </button>
-                </div>
-              )}
-
-              {segments.length > 0 && (
-                <button
-                  className="btn-export"
-                  onClick={exportSequenceClick}
-                  disabled={exporting}
-                  title="Uses the Size selector above: Original quality, or compress the whole sequence to the chosen size"
-                >
-                  {exporting ? "Exporting…" : `Export sequence (${segments.length})`}
-                </button>
-              )}
-            </div>
-
-            {exporting && progress && (
-              <div className="export-progress" data-testid="export-progress">
-                <div className="export-progress-track">
-                  <div
-                    className="export-progress-fill"
-                    style={{ transform: `scaleX(${Math.max(0, Math.min(1, progress.fraction))})` }}
+                {sizeSelection === "custom" && (
+                  <input
+                    type="number"
+                    min={1}
+                    step={1}
+                    placeholder="MB"
+                    value={customMb}
+                    onChange={e => setCustomMb(e.target.value)}
+                    className="export-size-custom"
                   />
-                </div>
-                <span className="export-progress-label">
-                  {progress.phase} · {Math.round(progress.fraction * 100)}%
-                </span>
+                )}
+                {sizeSelection === "original" && (
+                  <label className="export-size">
+                    <span className="export-size-label">Format</span>
+                    <select
+                      value={exportMode}
+                      onChange={e => setExportMode(e.target.value as ExportMode)}
+                      className="export-size-select"
+                      title="Fast = instant stream copy at keyframes; Compatible = H.264 re-encode for universal playback"
+                    >
+                      <option value="fast">Fast (lossless copy)</option>
+                      <option value="compatible">Compatible (H.264)</option>
+                    </select>
+                  </label>
+                )}
+                <button className="btn-export" onClick={doExport} disabled={exporting}>
+                  {exporting ? "Exporting…" : "Export trim"}
+                </button>
+                {exporting && (
+                  <button className="btn-cancel" onClick={cancelExportClick}>Cancel</button>
+                )}
               </div>
-            )}
 
-            {status && (
-              <div
-                className={
-                  status.startsWith("Export failed")
-                    ? "msg-error"
-                    : /cancel/i.test(status)
-                      ? "msg-warn"
-                      : "msg-ok"
-                }
-                data-testid="export-status"
-              >
-                {status}
+              {/* Light timeline: stitch trimmed clips + optional music (§4.3) */}
+              <div className="sequence-panel">
+                <div className="sequence-header">
+                  <span className="sequence-title">Sequence</span>
+                  <div className="sequence-actions">
+                    <button
+                      className="btn-sm"
+                      onClick={addToSequence}
+                      disabled={inPoint === null || outPoint === null}
+                      title="Append the current In→Out selection to the sequence"
+                    >
+                      + Add clip
+                    </button>
+                    <button className="btn-sm" onClick={pickMusic} title="Overlay a music track">
+                      ♪ {music ? "Change music" : "Add music"}
+                    </button>
+                  </div>
+                </div>
+
+                {segments.length === 0 ? (
+                  <p className="sequence-empty">
+                    Trim a clip, then “Add clip” to build a sequence. Straight cuts, played in order.
+                  </p>
+                ) : (
+                  <>
+                    <ol className="sequence-list">
+                      {segments.map((seg, i) => (
+                        <li key={seg.id} className="sequence-item">
+                          <span className="sequence-index">{i + 1}</span>
+                          <span className="sequence-name" title={seg.path}>{seg.displayName}</span>
+                          <span className="sequence-span">
+                            {seg.inSecs.toFixed(1)}–{seg.outSecs.toFixed(1)}s
+                          </span>
+                          <div className="sequence-item-actions">
+                            <button
+                              className="seq-move"
+                              disabled={i === 0}
+                              onClick={() => setSegments(prev => moveSegment(prev, i, -1))}
+                              title="Move up"
+                              aria-label="Move up"
+                            >
+                              ▲
+                            </button>
+                            <button
+                              className="seq-move"
+                              disabled={i === segments.length - 1}
+                              onClick={() => setSegments(prev => moveSegment(prev, i, 1))}
+                              title="Move down"
+                              aria-label="Move down"
+                            >
+                              ▼
+                            </button>
+                            <button
+                              className="library-remove"
+                              onClick={() => setSegments(prev => removeSegment(prev, seg.id))}
+                              title="Remove from sequence"
+                              aria-label="Remove from sequence"
+                            >
+                              ×
+                            </button>
+                          </div>
+                        </li>
+                      ))}
+                    </ol>
+                    <div className="sequence-total">
+                      Total: {sequenceDuration(segments).toFixed(1)}s
+                    </div>
+                  </>
+                )}
+
+                {music && (
+                  <div className="music-row">
+                    <span className="music-name" title={music.path}>♪ {basename(music.path)}</span>
+                    <div className="audio-track-volume">
+                      <input
+                        type="range"
+                        min={0}
+                        max={200}
+                        value={Math.round(music.volume * 100)}
+                        onChange={e => updateMusic({ volume: parseInt(e.target.value) / 100 })}
+                        className="audio-volume-slider"
+                      />
+                      <span className="audio-volume-pct">{Math.round(music.volume * 100)}%</span>
+                    </div>
+                    <label className="music-loop">
+                      <input
+                        type="checkbox"
+                        checked={music.loopToLength}
+                        onChange={e => updateMusic({ loopToLength: e.target.checked })}
+                      />
+                      Loop
+                    </label>
+                    <button
+                      className="library-remove"
+                      onClick={() => setMusic(null)}
+                      title="Remove music"
+                      aria-label="Remove music"
+                    >
+                      ×
+                    </button>
+                  </div>
+                )}
+
+                {segments.length > 0 && (
+                  <button
+                    className="btn-export"
+                    onClick={exportSequenceClick}
+                    disabled={exporting}
+                    title="Uses the Size selector above: Original quality, or compress the whole sequence to the chosen size"
+                  >
+                    {exporting ? "Exporting…" : `Export sequence (${segments.length})`}
+                  </button>
+                )}
               </div>
-            )}
-          </>
-        )}
-      </main>
-    </div>
+
+              {exporting && progress && (
+                <div className="export-progress" data-testid="export-progress">
+                  <div className="export-progress-track">
+                    <div
+                      className="export-progress-fill"
+                      style={{ transform: `scaleX(${Math.max(0, Math.min(1, progress.fraction))})` }}
+                    />
+                  </div>
+                  <span className="export-progress-label">
+                    {progress.phase} · {Math.round(progress.fraction * 100)}%
+                  </span>
+                </div>
+              )}
+
+              {status && (
+                <div
+                  className={
+                    status.startsWith("Export failed")
+                      ? "msg-error"
+                      : /cancel/i.test(status)
+                        ? "msg-warn"
+                        : "msg-ok"
+                  }
+                  data-testid="export-status"
+                >
+                  {status}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 

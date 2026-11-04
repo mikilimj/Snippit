@@ -1,37 +1,5 @@
 /* ─── Editor UI — consumes the Midnight aurora tokens from theme.css ─────────── */
 
-.app-layout {
-  display: flex;
-  height: 100vh;
-  overflow: hidden;
-  background: var(--bg);
-}
-
-/* ─── Library sidebar ───────────────────────────────────────────────────────── */
-.library-panel {
-  min-width: 184px;
-  flex-shrink: 0;
-  display: flex;
-  flex-direction: column;
-  background: var(--panel-solid);
-  border-right: 1px solid var(--border);
-  overflow: hidden;
-}
-
-/* ─── Resize handles ────────────────────────────────────────────────────────── */
-.resize-handle-x {
-  width: 6px;
-  flex-shrink: 0;
-  cursor: col-resize;
-  background: transparent;
-  transition: background 0.15s ease;
-  touch-action: none;
-}
-
-.resize-handle-x:hover {
-  background: var(--accent-border);
-}
-
 .brand-row {
   display: flex;
   align-items: center;
@@ -55,86 +23,6 @@
   color: var(--text);
 }
 
-.library-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 10px 12px;
-  flex-shrink: 0;
-}
-
-.library-title {
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--text-faint);
-}
-
-.library-empty {
-  padding: 20px 12px;
-  color: var(--text-faint);
-  font-size: 12px;
-  text-align: center;
-  margin: 0;
-}
-
-.library-list {
-  list-style: none;
-  margin: 0;
-  padding: 4px 6px;
-  overflow-y: auto;
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.library-item {
-  padding: 7px 8px;
-  cursor: pointer;
-  border-radius: var(--radius-sm);
-  border: 1px solid transparent;
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  gap: 6px;
-}
-
-.library-item:hover { background: var(--panel-raised); }
-.library-item.active {
-  background: var(--accent-tint);
-  border-color: var(--accent-border);
-}
-
-.library-item-text {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  flex: 1;
-  min-width: 0;
-}
-
-.library-thumb {
-  flex: none;
-  width: 44px;
-  height: 26px;
-  border-radius: var(--radius-sm);
-  object-fit: cover;
-  background: var(--panel-raised);
-  border: 1px solid var(--border);
-}
-
-.library-thumb-empty {
-  background: linear-gradient(135deg, var(--panel-raised), var(--panel));
-}
-
-.library-header-actions {
-  display: flex;
-  gap: 4px;
-  align-items: center;
-}
-
 .library-remove {
   flex: none;
   display: inline-flex;
@@ -154,7 +42,6 @@
   transition: opacity 120ms ease, background 120ms ease, color 120ms ease;
 }
 
-.library-item:hover .library-remove { opacity: 1; }
 .library-remove:hover {
   background: var(--panel);
   color: var(--text);
@@ -165,29 +52,13 @@
   cursor: default;
   opacity: 0;
 }
-.library-item:hover .library-cloud-delete:disabled { opacity: 0.35; }
+.grid-card-actions-overlay .library-cloud-delete:disabled { opacity: 0.35; }
 .library-cloud-delete:disabled:hover {
   background: transparent;
   color: var(--text-faint);
 }
 
-.library-name {
-  font-size: 12px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--text);
-}
-
-.library-item.active .library-name { color: var(--accent-strong); }
-
-.library-meta {
-  font-size: 11px;
-  color: var(--text-faint);
-  font-variant-numeric: tabular-nums;
-}
-
-/* Favorite marker in the meta line — the ★ action button is hidden until
+/* Favorite marker on a card's name line — the ★ action button only appears on
    hover, so this keeps favorited clips recognizable at rest. */
 .fav-inline { color: var(--warn); }
 
@@ -260,8 +131,7 @@
 }
 
 /* ─── Per-clip actions (favorite / add-to-folder / remove) ───────────────────── */
-/* Collapsed until the row is hovered: the clip name runs all the way to the
-   panel edge, and the actions expand into that space on hover. */
+/* Collapsed at rest; the grid card's hover overlay expands them into view. */
 .library-actions {
   flex: none;
   display: flex;
@@ -269,10 +139,6 @@
   gap: 2px;
   width: 0;
   overflow: hidden;
-}
-.library-item:hover .library-actions,
-.library-item:focus-within .library-actions {
-  width: auto;
 }
 
 .library-fav {
@@ -289,9 +155,8 @@
   opacity: 0;
   transition: opacity 120ms ease, color 120ms ease;
 }
-.library-item:hover .library-fav { opacity: 1; }
 .library-fav:hover { background: transparent; border-color: transparent; color: var(--warn); }
-/* A set favorite stays visible even when the row isn't hovered. */
+/* A set favorite stays visible even when the card isn't hovered. */
 .library-fav.on { opacity: 1; color: var(--warn); }
 
 .library-folder-select {
@@ -307,75 +172,51 @@
   opacity: 0;
   transition: opacity 120ms ease;
 }
-.library-item:hover .library-folder-select { opacity: 1; }
 
-.library-rename-input {
-  width: 100%;
-  padding: 2px 6px;
-  font-size: 12px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--accent-border);
-  background: var(--panel-raised);
-  color: var(--text);
+/* ─── Clip popup: the editor floats over the grid, never fullscreen ─────────── */
+.clip-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  z-index: 40;
 }
 
-/* ─── Editor area ───────────────────────────────────────────────────────────── */
-.editor-panel {
-  flex: 1;
+.clip-modal {
+  width: min(1100px, 92vw);
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel-solid);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
+  overflow: hidden;
+}
+
+.clip-modal-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px 10px 16px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.clip-modal-header .clip-info { flex: 1; min-width: 0; }
+
+.clip-modal-close { flex-shrink: 0; }
+
+.clip-modal-body {
+  min-height: 0;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 10px;
   padding: 14px;
-  overflow-y: auto;
-  min-width: 0;
-  position: relative;
-}
-
-/* ─── Empty state: the wizard's aurora carries into the app ─────────────────── */
-.empty-state {
-  flex: 1;
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  overflow: hidden;
-  border-radius: var(--radius-lg);
-}
-
-.empty-card {
-  position: relative;
-  z-index: 2;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 10px;
-  padding: 36px 44px;
-  border-radius: var(--radius-lg);
-  background: var(--panel-glass);
-  backdrop-filter: blur(18px);
-  border: 1px solid var(--border);
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
-  text-align: center;
-}
-
-.empty-logo {
-  width: 56px;
-  height: 56px;
-  border-radius: 14px;
-  display: block;
-}
-
-.empty-card h1 {
-  margin: 4px 0 0;
-  font-size: 22px;
-  font-weight: 700;
-  color: var(--text);
-}
-
-.empty-card p {
-  margin: 0 0 10px;
-  font-size: 13px;
-  color: var(--text-dim);
 }
 
 /* ─── Clip info bar ─────────────────────────────────────────────────────────── */
