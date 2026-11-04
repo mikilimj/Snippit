@@ -2,9 +2,10 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { probeClip, exportTrim, exportCompressed, cancelExport, prepareAudioTracks, prepareVideoOnly, getAppRoot, addToLibrary, listLibrary, removeFromLibrary, rescanLibrary, setClipFavorite, renameLibraryClip, createFolder, listFolders, deleteFolder, addClipToFolder, removeClipFromFolder, listClipsInFolder, listUnsortedLibrary, ensureProxy, storageStatus, storageSyncedRelNames, storageDeleteRemote, type ClipMeta, type ClipRow, type ExportMode, type ExportProgress, type Folder, type TrackConfig, type SetupResult } from "./api";
+import { probeClip, exportTrim, exportCompressed, cancelExport, prepareAudioTracks, prepareVideoOnly, getAppRoot, addToLibrary, listLibrary, removeFromLibrary, deleteClipFile, rescanLibrary, setClipFavorite, renameLibraryClip, createFolder, listFolders, deleteFolder, addClipToFolder, removeClipFromFolder, listClipsInFolder, listUnsortedLibrary, ensureProxy, storageStatus, storageSyncedRelNames, storageDeleteRemote, type ClipMeta, type ClipRow, type ExportMode, type ExportProgress, type Folder, type TrackConfig, type SetupResult } from "./api";
 import { exportSequence, type MusicOverlay } from "./api";
 import { newClipBelongsInView, applyFavorite, applyRename, upsertByCapture, type LibraryView } from "./libraryView";
+import { canRemoveIndexOnly, clipRelName } from "./libraryPaths";
 import { previewPath, shouldTryProxy } from "./preview";
 import { ChunkedAudioEngine } from "./audioEngine";
 import { moveSegment, removeSegment, sequenceDuration, toBackendSegments, type SequenceSegment } from "./sequence";
@@ -17,24 +18,24 @@ import { FirstRunWizard } from "./FirstRunWizard";
 import { SettingsModal } from "./SettingsModal";
 import { SyncDiffModal } from "./SyncDiffModal";
 import LibraryGrid from "./LibraryGrid";
+import DeleteClipDialog, { type DeleteMode } from "./DeleteClipDialog";
 import "./App.css";
 
 function basename(p: string) {
   return p.split(/[\\/]/).pop() ?? p;
 }
 
-// A clip's rel-name: its path relative to `<root>/Clips/`, `/`-separated — the
-// key sync_state stores. null when the clip lives outside the Clips folder.
-function clipRelName(appRoot: string | null | undefined, path: string): string | null {
-  if (typeof appRoot !== "string") return null;
-  const norm = path.replace(/\\/g, "/");
-  const prefix = `${appRoot.replace(/\\/g, "/").replace(/\/$/, "")}/Clips/`;
-  return norm.startsWith(prefix) ? norm.slice(prefix.length) : null;
-}
-
 function App() {
   const [path, setPath] = useState<string | null>(null);
   const [meta, setMeta] = useState<ClipMeta | null>(null);
+  // The library row for the open clip (null until the probe/upsert finishes).
+  // The popup header shows and edits its display name.
+  const [openRow, setOpenRow] = useState<ClipRow | null>(null);
+  // Clip awaiting delete confirmation, and the popup header's rename draft.
+  const [deleteTarget, setDeleteTarget] = useState<ClipRow | null>(null);
+  const [headerRenaming, setHeaderRenaming] = useState(false);
+  const [headerName, setHeaderName] = useState("");
+  const headerRenameCancelRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [videoError, setVideoError] = useState<string | null>(null);
   // Preview proxy (spec §4.4): set when the WebView can't decode the original.
@@ -677,6 +678,8 @@ function App() {
     setOutPoint(null);
     setStatus(null);
     setPlaying(false);
+    setOpenRow(null);
+    setHeaderRenaming(false);
 
     // Reset audio state for the new clip
     setAudioReady(false);
@@ -734,12 +737,13 @@ function App() {
       // is unsorted, so it only appears in views that show new clips.
       addToLibrary(p, m)
         .then(row => {
+          // The popup header reads (and renames) this row's display name.
+          setOpenRow(row);
           if (!newClipBelongsInView(activeView)) return;
           setLibrary(prev => upsertByCapture(prev, row));
         })
         .catch(err => {
           console.error("Failed to add clip to library:", err);
-          if (!newClipBelongsInView(activeView)) return;
           // In-session stand-in for the row the backend would have returned. Its
           // sort key must match the backend's `COALESCE(captured_at, file_mtime)`
           // so the clip lands where a reload would put it.
@@ -761,6 +765,9 @@ function App() {
             capturedAt: m.capturedAt,
             effectiveCapturedAt: m.capturedAt ?? m.fileMtime ?? now,
           };
+          // Still nameable in the popup, it just won't survive a restart.
+          setOpenRow(fallback);
+          if (!newClipBelongsInView(activeView)) return;
           setLibrary(prev =>
             prev.some(e => e.path === p) ? prev : upsertByCapture(prev, fallback),
           );
@@ -803,23 +810,52 @@ function App() {
   }
 
   // Remove a clip from the library index only — the source file is untouched.
-  async function removeFromLibraryClick(e: React.MouseEvent, entry: ClipRow) {
-    e.stopPropagation();
+  // (Reached from the delete dialog's "remove from Snippit only" option.)
+  async function removeClipFromIndex(entry: ClipRow) {
     setLibrary(prev => prev.filter(x => x.id !== entry.id));
-    if (entry.id >= 0) {
-      try {
-        await removeFromLibrary(entry.id);
-      } catch (err) {
-        console.error("Failed to remove clip from library:", err);
-      }
+    if (openRow?.id === entry.id) closeEditor();
+    if (entry.id < 0) return;
+    try {
+      await removeFromLibrary(entry.id);
+    } catch (err) {
+      console.error("Failed to remove clip from library:", err);
+    }
+  }
+
+  // ── Delete clip (confirmation dialog) ─────────────────────────────────────────
+  function requestDeleteClip(entry: ClipRow) {
+    setDeleteTarget(entry);
+  }
+
+  async function confirmDeleteClip(mode: DeleteMode) {
+    const entry = deleteTarget;
+    if (!entry) return;
+    setDeleteTarget(null);
+
+    if (mode === "index") {
+      await removeClipFromIndex(entry);
+      return;
+    }
+
+    // Erase the file, then drop the row. The backend deletes the source and its
+    // index entry in one command, so a half-failed delete can't leave a row
+    // pointing at a file that no longer exists.
+    try {
+      await deleteClipFile(entry.path);
+      setLibrary(prev => prev.filter(x => x.id !== entry.id));
+      if (openRow?.id === entry.id) closeEditor();
+    } catch (err) {
+      console.error("Failed to delete clip file:", err);
+      // The file (and its row) are still there — reconcile with the index.
+      loadView(activeView);
     }
   }
 
   // ── Favorites, rename, folders ────────────────────────────────────────────────
-  async function toggleFavorite(e: React.MouseEvent, entry: ClipRow) {
-    e.stopPropagation();
+  async function toggleFavorite(entry: ClipRow) {
     const favorite = !entry.favorite;
     setLibrary(prev => applyFavorite(prev, entry.id, favorite, activeView));
+    setOpenRow(prev => (prev && prev.id === entry.id ? { ...prev, favorite } : prev));
     if (entry.id < 0) return; // in-session-only fallback row, nothing to persist
     try {
       await setClipFavorite(entry.id, favorite);
@@ -831,8 +867,7 @@ function App() {
 
   // One of only two remote-delete paths (the other is the diff window); the
   // local file is never touched.
-  async function deleteFromServer(e: React.MouseEvent, entry: ClipRow) {
-    e.stopPropagation();
+  async function deleteFromServer(entry: ClipRow) {
     const rel = clipRelName(appRoot, entry.path);
     if (!rel) return;
     if (!confirm(`Delete "${entry.displayName}" from the server? The local file is untouched.`)) return;
@@ -850,6 +885,7 @@ function App() {
 
   async function doRename(id: number, name: string) {
     setLibrary(prev => applyRename(prev, id, name));
+    setOpenRow(prev => (prev && prev.id === id ? { ...prev, displayName: name } : prev));
     if (id < 0) return;
     try {
       await renameLibraryClip(id, name);
@@ -861,6 +897,28 @@ function App() {
 
   // Called by the grid view's inline rename (it has its own editingId state).
   function handleGridRename(id: number, name: string) {
+    doRename(id, name);
+  }
+
+  // ── Popup header rename: click the name, edit in place ────────────────────────
+  const openName = openRow?.displayName ?? (path ? basename(path) : "");
+
+  function startHeaderRename() {
+    headerRenameCancelRef.current = false;
+    setHeaderName(openName);
+    setHeaderRenaming(true);
+  }
+
+  function commitHeaderRename() {
+    if (headerRenameCancelRef.current) {
+      headerRenameCancelRef.current = false;
+      setHeaderRenaming(false);
+      return;
+    }
+    const id = openRow?.id ?? null;
+    const name = headerName.trim();
+    setHeaderRenaming(false);
+    if (id === null || !name || name === openName) return;
     doRename(id, name);
   }
 
@@ -876,8 +934,7 @@ function App() {
     }
   }
 
-  async function removeFromCurrentFolder(e: React.MouseEvent, clipId: number) {
-    e.stopPropagation();
+  async function removeFromCurrentFolder(clipId: number) {
     if (activeView.kind !== "folder") return;
     const folderId = activeView.id;
     setLibrary(prev => prev.filter(c => c.id !== clipId));
@@ -974,10 +1031,10 @@ function App() {
         onOpenClip={openClip}
         onToggleFavorite={toggleFavorite}
         onAddToFolder={addToFolder}
-        onRemoveFromLibrary={removeFromLibraryClick}
         onRemoveFromCurrentFolder={removeFromCurrentFolder}
         onRenameClip={handleGridRename}
         onDeleteFromServer={deleteFromServer}
+        onRequestDelete={requestDeleteClip}
         mediaPort={mediaPort}
         storageProvider={storageProvider}
         syncedRels={syncedRels}
@@ -1003,7 +1060,30 @@ function App() {
           >
             <div className="clip-modal-header">
               <div className="clip-info">
-                <span className="clip-name">{basename(path)}</span>
+                {headerRenaming ? (
+                  <input
+                    className="clip-name-input"
+                    autoFocus
+                    value={headerName}
+                    onChange={e => setHeaderName(e.target.value)}
+                    onKeyDown={e => {
+                      if (e.key === "Enter") commitHeaderRename();
+                      if (e.key === "Escape") {
+                        headerRenameCancelRef.current = true;
+                        setHeaderRenaming(false);
+                      }
+                    }}
+                    onBlur={commitHeaderRename}
+                  />
+                ) : (
+                  <span
+                    className="clip-name"
+                    title="Click to rename"
+                    onClick={startHeaderRename}
+                  >
+                    {openName}
+                  </span>
+                )}
                 {meta && (
                   <span className="clip-details">
                     {meta.durationSecs.toFixed(2)}s · {meta.width}×{meta.height} · {meta.videoCodec} · {meta.audioTracks.length}ch
@@ -1353,6 +1433,15 @@ function App() {
             </div>
           </div>
         </div>
+      )}
+
+      {deleteTarget && (
+        <DeleteClipDialog
+          entry={deleteTarget}
+          canRemoveOnly={canRemoveIndexOnly(appRoot, deleteTarget.path)}
+          onCancel={() => setDeleteTarget(null)}
+          onConfirm={confirmDeleteClip}
+        />
       )}
     </>
   );

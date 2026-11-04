@@ -1,16 +1,10 @@
 import { useState, useRef } from "react";
 import type { ClipRow, Folder } from "./api";
 import type { LibraryView } from "./libraryView";
+import { clipRelName } from "./libraryPaths";
 import FolderRail from "./FolderRail";
-import ClipCardActions from "./ClipCardActions";
+import ClipContextMenu from "./ClipContextMenu";
 import logo from "./assets/logo.png";
-
-function clipRelName(appRoot: string | null | undefined, path: string): string | null {
-  if (typeof appRoot !== "string") return null;
-  const norm = path.replace(/\\/g, "/");
-  const prefix = `${appRoot.replace(/\\/g, "/").replace(/\/$/, "")}/Clips/`;
-  return norm.startsWith(prefix) ? norm.slice(prefix.length) : null;
-}
 
 interface LibraryGridProps {
   library: ClipRow[];
@@ -27,12 +21,13 @@ interface LibraryGridProps {
   onStartCreateFolder: () => void;
   // Clip actions
   onOpenClip: (path: string) => void;
-  onToggleFavorite: (e: React.MouseEvent, entry: ClipRow) => void;
+  onToggleFavorite: (entry: ClipRow) => void;
   onAddToFolder: (clipId: number, folderId: number) => void;
-  onRemoveFromLibrary: (e: React.MouseEvent, entry: ClipRow) => void;
-  onRemoveFromCurrentFolder: (e: React.MouseEvent, clipId: number) => void;
+  onRemoveFromCurrentFolder: (clipId: number) => void;
   onRenameClip: (id: number, name: string) => void;
-  onDeleteFromServer: (e: React.MouseEvent, entry: ClipRow) => void;
+  onDeleteFromServer: (entry: ClipRow) => void;
+  /** Opens the delete confirmation (index-only vs. erase the file). */
+  onRequestDelete: (entry: ClipRow) => void;
   // Infra
   mediaPort: number | null;
   storageProvider: string | null;
@@ -59,10 +54,10 @@ export default function LibraryGrid({
   onOpenClip,
   onToggleFavorite,
   onAddToFolder,
-  onRemoveFromLibrary,
   onRemoveFromCurrentFolder,
   onRenameClip,
   onDeleteFromServer,
+  onRequestDelete,
   mediaPort,
   storageProvider,
   syncedRels,
@@ -74,7 +69,11 @@ export default function LibraryGrid({
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editingName, setEditingName] = useState("");
   const renameCancelRef = useRef(false);
+  // Card the right-click menu is open for, plus where it was opened.
+  const [menu, setMenu] = useState<{ entry: ClipRow; x: number; y: number } | null>(null);
 
+  // Clicking the name turns it into an input (single click: no double-click to
+  // discover). The click must not reach the card, which would open the clip.
   function startRename(e: React.MouseEvent, entry: ClipRow) {
     e.stopPropagation();
     renameCancelRef.current = false;
@@ -133,7 +132,7 @@ export default function LibraryGrid({
           {activeView.kind === "all"
             ? "Open a clip to add it here."
             : activeView.kind === "favorites"
-              ? "No favorites yet — tap ☆ on a clip."
+              ? "No favorites yet — right-click a clip to add one."
               : activeView.kind === "unsorted"
                 ? "Nothing unsorted — every clip is filed away."
                 : "No clips in this folder yet."}
@@ -145,6 +144,10 @@ export default function LibraryGrid({
               key={entry.id}
               className="grid-card"
               onClick={() => onOpenClip(entry.path)}
+              onContextMenu={e => {
+                e.preventDefault();
+                setMenu({ entry, x: e.clientX, y: e.clientY });
+              }}
               title={entry.path}
             >
               <div className="grid-thumb-wrap">
@@ -161,20 +164,7 @@ export default function LibraryGrid({
                 <span className="grid-duration">
                   {entry.durationSecs.toFixed(1)}s
                 </span>
-                <div className="grid-card-actions-overlay">
-                  <ClipCardActions
-                    entry={entry}
-                    activeView={activeView}
-                    folders={folders}
-                    storageProvider={storageProvider}
-                    syncedToServer={syncedRels.has(clipRelName(appRoot, entry.path) ?? "")}
-                    onToggleFavorite={onToggleFavorite}
-                    onAddToFolder={onAddToFolder}
-                    onRemoveFromLibrary={onRemoveFromLibrary}
-                    onRemoveFromCurrentFolder={onRemoveFromCurrentFolder}
-                    onDeleteFromServer={onDeleteFromServer}
-                  />
-                </div>
+                {entry.favorite && <span className="grid-fav-badge">★</span>}
               </div>
               <div className="grid-card-body">
                 {editingId === entry.id ? (
@@ -183,6 +173,7 @@ export default function LibraryGrid({
                     autoFocus
                     value={editingName}
                     onClick={e => e.stopPropagation()}
+                    onContextMenu={e => e.stopPropagation()}
                     onChange={e => setEditingName(e.target.value)}
                     onKeyDown={e => {
                       if (e.key === "Enter") commitRename();
@@ -196,7 +187,8 @@ export default function LibraryGrid({
                 ) : (
                   <div
                     className="grid-card-name"
-                    onDoubleClick={e => startRename(e, entry)}
+                    title="Click to rename"
+                    onClick={e => startRename(e, entry)}
                   >
                     {entry.favorite && <span className="fav-inline">★ </span>}
                     {entry.displayName}
@@ -209,6 +201,24 @@ export default function LibraryGrid({
             </div>
           ))}
         </div>
+      )}
+
+      {menu && (
+        <ClipContextMenu
+          entry={menu.entry}
+          x={menu.x}
+          y={menu.y}
+          folders={folders}
+          activeView={activeView}
+          storageProvider={storageProvider}
+          syncedToServer={syncedRels.has(clipRelName(appRoot, menu.entry.path) ?? "")}
+          onClose={() => setMenu(null)}
+          onToggleFavorite={() => onToggleFavorite(menu.entry)}
+          onAddToFolder={folderId => onAddToFolder(menu.entry.id, folderId)}
+          onRemoveFromCurrentFolder={() => onRemoveFromCurrentFolder(menu.entry.id)}
+          onDelete={() => onRequestDelete(menu.entry)}
+          onDeleteFromServer={() => onDeleteFromServer(menu.entry)}
+        />
       )}
     </div>
   );
