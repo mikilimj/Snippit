@@ -42,7 +42,6 @@ interface LibraryGridProps {
   onRescan: () => void;
   onSettings: () => void;
   onPickClip: () => void;
-  onBackToEditor: () => void;
 }
 
 export default function LibraryGrid({
@@ -71,7 +70,6 @@ export default function LibraryGrid({
   onRescan,
   onSettings,
   onPickClip,
-  onBackToEditor,
 }: LibraryGridProps) {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editingName, setEditingName] = useState("");
@@ -105,13 +103,6 @@ export default function LibraryGrid({
           <span className="brand-name">Snippit</span>
         </div>
         <div className="grid-toolbar">
-          <button
-            className="btn-sm"
-            title="Back to editor"
-            onClick={onBackToEditor}
-          >
-            ← Editor
-          </button>
           <button
             className="btn-sm"
             title="Re-scan watched folders"
@@ -153,7 +144,7 @@ export default function LibraryGrid({
             <div
               key={entry.id}
               className="grid-card"
-              onClick={() => { onOpenClip(entry.path); onBackToEditor(); }}
+              onClick={() => onOpenClip(entry.path)}
               title={entry.path}
             >
               <div className="grid-thumb-wrap">
