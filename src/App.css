@@ -268,6 +268,93 @@
   background: var(--accent-border);
 }
 
+/* ─── Transport bar (the app's only playback controller) ─────────────────────── */
+.player-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+  padding: 6px 10px;
+  background: var(--panel-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.pc-btn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 30px;
+  height: 26px;
+  padding: 0 6px;
+  font-size: 12px;
+  line-height: 1;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  cursor: pointer;
+}
+.pc-btn:hover { background: var(--panel-hover); }
+
+.pc-bar {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  cursor: pointer;
+  touch-action: none;
+  user-select: none;
+}
+
+.pc-track {
+  position: absolute;
+  left: 0; right: 0;
+  top: 11px; bottom: 11px;
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 3px;
+}
+
+.pc-fill {
+  position: absolute;
+  left: 0;
+  top: 11px; bottom: 11px;
+  background: var(--accent);
+  border-radius: 3px;
+  pointer-events: none;
+}
+
+.pc-thumb {
+  position: absolute;
+  top: 50%;
+  width: 10px;
+  height: 10px;
+  margin: -5px 0 0 -5px;
+  border-radius: 50%;
+  background: var(--accent-strong);
+  pointer-events: none;
+}
+
+.pc-time {
+  flex: none;
+  font-size: 11px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.pc-volume {
+  flex: none;
+  width: 84px;
+  height: 3px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  accent-color: var(--accent);
+}
+
 /* ─── Timeline ──────────────────────────────────────────────────────────────── */
 .tl-bar {
   position: relative;
