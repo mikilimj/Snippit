@@ -325,11 +325,10 @@ function App() {
     engineRef.current?.pause();
   }
 
-  // The native <video controls> bar exposes its own volume/mute button that
-  // operates directly on the DOM element, bypassing React entirely — a user
-  // clicking it (or dragging the slider) unmutes the element's own decoded
-  // audio, which then plays alongside the Web Audio mix and isn't reachable
-  // by the per-track sliders. Once Web Audio owns playback, force it back.
+  // The element has no native controls any more, but a volume-change can still
+  // come from elsewhere (OS media keys, a stale attribute on a swapped source).
+  // Unmuting it would play its own decoded audio alongside the Web Audio mix,
+  // where no slider can reach it — so once Web Audio owns playback, force it back.
   function onVideoVolumeChange() {
     const v = videoRef.current;
     if (v && audioReady && !v.muted) {
@@ -450,6 +449,21 @@ function App() {
 
   function seekTo(time: number) {
     if (videoRef.current) videoRef.current.currentTime = time;
+  }
+
+  // Trim slider handles: clamp against the opposite point, then jump the
+  // playhead there so the picture follows the cut in real time while dragging.
+  function changeIn(time: number) {
+    const next = setIn(time, outPoint);
+    setInPoint(next);
+    seekTo(next);
+  }
+
+  function changeOut(time: number) {
+    if (meta === null) return;
+    const next = setOut(time, inPoint, meta.durationSecs);
+    setOutPoint(next);
+    seekTo(next);
   }
 
   // ── Transport bar ─────────────────────────────────────────────────────────────
@@ -1063,21 +1077,28 @@ function App() {
               )}
 
               {meta && (
-                <Timeline
-                  duration={meta.durationSecs}
-                  videoRef={videoRef}
-                  inPoint={inPoint}
-                  outPoint={outPoint}
-                  onSeek={seekTo}
-                />
+                <div className="trim-section">
+                  <div className="trim-header">
+                    <span className="audio-panel-title">Trim</span>
+                    <span className="trim-readout">
+                      {inPoint !== null ? inPoint.toFixed(2) + "s" : "—"} → {outPoint !== null ? outPoint.toFixed(2) + "s" : "—"}
+                      {inPoint !== null && outPoint !== null
+                        ? ` · ${(outPoint - inPoint).toFixed(2)}s`
+                        : ""}
+                    </span>
+                  </div>
+                  <Timeline
+                    duration={meta.durationSecs}
+                    videoRef={videoRef}
+                    inPoint={inPoint}
+                    outPoint={outPoint}
+                    onChangeIn={changeIn}
+                    onChangeOut={changeOut}
+                  />
+                </div>
               )}
 
               <div className="trim-controls" data-testid="trim-controls">
-                <button onClick={markIn}>Set In (I)</button>
-                <span className="trim-readout">
-                  {inPoint !== null ? inPoint.toFixed(2) + "s" : "—"} → {outPoint !== null ? outPoint.toFixed(2) + "s" : "—"}
-                </span>
-                <button onClick={markOut}>Set Out (O)</button>
                 <label className="export-size">
                   <span className="export-size-label">Size</span>
                   <select

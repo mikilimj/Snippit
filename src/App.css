@@ -358,8 +358,7 @@
 /* ─── Timeline ──────────────────────────────────────────────────────────────── */
 .tl-bar {
   position: relative;
-  height: 40px;
-  cursor: pointer;
+  height: 42px;
   user-select: none;
   touch-action: none;
   flex-shrink: 0;
@@ -368,25 +367,41 @@
 .tl-track {
   position: absolute;
   left: 0; right: 0;
-  top: 14px; bottom: 14px;
-  background: var(--panel-raised);
+  top: 15px; bottom: 15px;
+  background: rgba(255, 255, 255, 0.1);
   border: 1px solid var(--border);
   border-radius: 4px;
 }
 
 .tl-range {
   position: absolute;
-  top: 14px; bottom: 14px;
+  top: 15px; bottom: 15px;
   background: rgba(45, 212, 191, 0.22);
   pointer-events: none;
 }
 
+/* The handle is an 18px-wide grab area centred on the cut point; the visible
+   mark is the 2px line inside it, so it is easy to catch with the pointer. */
 .tl-handle {
   position: absolute;
   top: 0; bottom: 0;
-  width: 2px;
-  pointer-events: none;
+  width: 18px;
+  margin-left: -9px;
+  cursor: ew-resize;
+  touch-action: none;
 }
+
+.tl-handle-line {
+  position: absolute;
+  top: 4px; bottom: 4px;
+  left: 50%;
+  width: 2px;
+  margin-left: -1px;
+  border-radius: 1px;
+}
+
+.tl-in .tl-handle-line { background: var(--in-color); }
+.tl-out .tl-handle-line { background: var(--out-color); }
 
 .tl-handle span {
   position: absolute;
@@ -400,15 +415,12 @@
   line-height: 1.2;
 }
 
-.tl-in { background: var(--in-color); }
 .tl-in span { background: var(--in-color); color: #042f2a; }
-
-.tl-out { background: var(--out-color); }
 .tl-out span { background: var(--out-color); color: #4c0519; }
 
 .tl-cursor {
   position: absolute;
-  top: 0; bottom: 0;
+  top: 4px; bottom: 4px;
   width: 2px;
   background: var(--text);
   transform: translateX(-1px);
@@ -427,6 +439,20 @@
 .tl-time-right { right: 0; }
 
 /* ─── Trim controls ─────────────────────────────────────────────────────────── */
+.trim-section {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.trim-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .trim-controls {
   display: flex;
   align-items: center;
@@ -436,8 +462,6 @@
 }
 
 .trim-readout {
-  flex: 1;
-  text-align: center;
   font-size: 12px;
   color: var(--text-dim);
   font-variant-numeric: tabular-nums;
