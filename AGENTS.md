@@ -77,16 +77,28 @@ into one output stream (video stream-copied, audio re-encoded to AAC).
 
 **Frontend layout** (`src/`):
 
-- `App.tsx` — main app shell: `.app-layout` is a flex row of `aside.library-panel`
-  (fixed-width sidebar) + `main.editor-panel` (video player + controls, `flex: 1`)
-- `Timeline.tsx` — custom scrub timeline for setting in/out trim points (`I`/`O` keys)
+- `App.tsx` — the app shell. The clip grid is the whole screen; picking a card
+  opens the editor in a floating `.clip-modal` popup (not fullscreen) over
+  `.clip-modal-backdrop`, which hosts the player, audio panel, trim slider,
+  export controls and sequence panel. The popup closes on the header `×`, a
+  mousedown on the backdrop, or `Escape`.
+- `LibraryGrid.tsx` / `FolderRail.tsx` / `ClipCardActions.tsx` — the clip grid
+  (cards, folder chips, inline rename, per-card favorite/folder/remove actions)
+- `PlayerControls.tsx` — the single transport bar (play/pause, scrub, time
+  readout, master preview volume). The `<video>` is rendered *without* native
+  `controls` on purpose, so nothing overlays the picture on hover. Its master
+  volume is the master `GainNode` in `audioEngine.ts` and is preview-only —
+  export still mixes the per-track configs.
+- `Timeline.tsx` — dual-handle trim slider; it starts out spanning the whole clip
+  and dragging a handle seeks the video to that time in real time. The `I`/`O`
+  keys still mark points at the playhead.
 - `FirstRunWizard.tsx` / `SettingsModal.tsx` — onboarding and settings UI
 - `api.ts` — typed wrappers around Tauri `invoke` calls
 - `audioEngine.ts` — the chunked preview-audio engine (fetch/decode/schedule on the
   shared AudioContext); its scheduling math lives in `audioChunks.ts`
-- `trim.ts`, `sequence.ts`, `exportOptions.ts`, `libraryView.ts`, `preview.ts`,
-  `audioChunks.ts`, `wizardValidation.ts`, `resizable.ts` — pure logic modules,
-  each with a co-located `*.test.ts`
+- `trim.ts`, `timecode.ts`, `sequence.ts`, `exportOptions.ts`, `libraryView.ts`,
+  `preview.ts`, `audioChunks.ts`, `wizardValidation.ts`, `resizable.ts` — pure
+  logic modules, each with a co-located `*.test.ts`
 
 ## Testing instructions
 

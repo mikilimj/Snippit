@@ -31,9 +31,10 @@ nothing to install separately.
 
 ## Features
 
-- **Trim with instant preview** — set in/out points from the current playhead
-  (`I` / `O` keys) on a custom scrub timeline, with a fast lossless (`-c copy`)
-  export path whenever no re-encoding is needed.
+- **Trim with instant preview** — pick a clip in the grid and it opens in a
+  floating player; drag the in/out handles on the trim slider and the picture
+  follows the cut in real time (`I` / `O` keys still mark the playhead). Exports
+  use a fast lossless (`-c copy`) path whenever no re-encoding is needed.
 - **Live multi-track audio mixing** — mute or adjust the volume (0–200%) of each
   audio track independently while previewing, all routed through a single shared
   `AudioContext` so the OS only ever sees one audio stream. Export mixes exactly
