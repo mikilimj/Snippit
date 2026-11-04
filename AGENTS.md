@@ -82,8 +82,13 @@ into one output stream (video stream-copied, audio re-encoded to AAC).
   `.clip-modal-backdrop`, which hosts the player, audio panel, trim slider,
   export controls and sequence panel. The popup closes on the header `×`, a
   mousedown on the backdrop, or `Escape`.
-- `LibraryGrid.tsx` / `FolderRail.tsx` / `ClipCardActions.tsx` — the clip grid
-  (cards, folder chips, inline rename, per-card favorite/folder/remove actions)
+- `LibraryGrid.tsx` / `FolderRail.tsx` / `ClipContextMenu.tsx` — the clip grid
+  (cards, folder chips). Per-clip actions live in the right-click menu — favourites
+  first, then the folder list, then delete — and card names rename in place on a
+  single click.
+- `DeleteClipDialog.tsx` — the delete confirmation: "remove from Snippit only"
+  (offered only for files outside the app's `Clips/` folder, which the watcher
+  would otherwise re-index) or "delete the file from disk".
 - `PlayerControls.tsx` — the transport buttons under the timetable: play/pause,
   position readout, mute + master preview volume and fullscreen. The `<video>` is
   rendered *without* native `controls` on purpose, so nothing overlays the picture
@@ -101,8 +106,8 @@ into one output stream (video stream-copied, audio re-encoded to AAC).
 - `audioEngine.ts` — the chunked preview-audio engine (fetch/decode/schedule on the
   shared AudioContext); its scheduling math lives in `audioChunks.ts`
 - `trim.ts`, `timecode.ts`, `sequence.ts`, `exportOptions.ts`, `libraryView.ts`,
-  `preview.ts`, `audioChunks.ts`, `wizardValidation.ts`, `resizable.ts` — pure
-  logic modules, each with a co-located `*.test.ts`
+  `libraryPaths.ts`, `preview.ts`, `audioChunks.ts`, `wizardValidation.ts`,
+  `resizable.ts` — pure logic modules, each with a co-located `*.test.ts`
 
 ## Testing instructions
 

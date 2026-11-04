@@ -43,7 +43,10 @@ nothing to install separately.
   what you heard in preview.
 - **Clip library** — a persistent, searchable library with favorites and folders,
   backed by SQLite, plus watch-mode folders that auto-index new recordings as they
-  land on disk.
+  land on disk. Click a clip's name to rename it, right-click a card to file it
+  into a folder, favourite it, or delete it — with a confirmation that offers
+  "remove from Snippit only" (for files kept outside the app's `Clips/` folder)
+  or erasing the file itself.
 - **Sequence export & compression** — stitch multiple trimmed clips into one
   export, or re-encode down to a target file size.
 - **Remote storage sync** — mirror your `Clips/` folder to SFTP, Dropbox, or
