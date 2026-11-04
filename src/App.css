@@ -38,28 +38,16 @@
   font-size: 15px;
   line-height: 1;
   cursor: pointer;
-  opacity: 0;
-  transition: opacity 120ms ease, background 120ms ease, color 120ms ease;
+  transition: background 120ms ease, color 120ms ease;
 }
 
 .library-remove:hover {
-  background: var(--panel);
+  background: var(--panel-hover);
   color: var(--text);
 }
 
-.library-cloud-delete { font-size: 13px; }
-.library-cloud-delete:disabled {
-  cursor: default;
-  opacity: 0;
-}
-.grid-card-actions-overlay .library-cloud-delete:disabled { opacity: 0.35; }
-.library-cloud-delete:disabled:hover {
-  background: transparent;
-  color: var(--text-faint);
-}
-
-/* Favorite marker on a card's name line — the ★ action button only appears on
-   hover, so this keeps favorited clips recognizable at rest. */
+/* Favorite marker on a card's name line — per-clip actions live in the
+   right-click menu, so this keeps favorited clips recognizable at rest. */
 .fav-inline { color: var(--warn); }
 
 /* ─── Folder rail (virtual-folder filters) ──────────────────────────────────── */
@@ -128,49 +116,6 @@
   border: 1px solid var(--accent-border);
   background: var(--panel-raised);
   color: var(--text);
-}
-
-/* ─── Per-clip actions (favorite / add-to-folder / remove) ───────────────────── */
-/* Collapsed at rest; the grid card's hover overlay expands them into view. */
-.library-actions {
-  flex: none;
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  width: 0;
-  overflow: hidden;
-}
-
-.library-fav {
-  flex: none;
-  width: 22px;
-  height: 22px;
-  padding: 0;
-  border: none;
-  background: transparent;
-  color: var(--text-faint);
-  font-size: 14px;
-  line-height: 1;
-  cursor: pointer;
-  opacity: 0;
-  transition: opacity 120ms ease, color 120ms ease;
-}
-.library-fav:hover { background: transparent; border-color: transparent; color: var(--warn); }
-/* A set favorite stays visible even when the card isn't hovered. */
-.library-fav.on { opacity: 1; color: var(--warn); }
-
-.library-folder-select {
-  flex: none;
-  max-width: 74px;
-  padding: 2px 4px;
-  font-size: 10px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border);
-  background: var(--panel-raised);
-  color: var(--text-dim);
-  cursor: pointer;
-  opacity: 0;
-  transition: opacity 120ms ease;
 }
 
 /* ─── Clip popup: the editor floats over the grid, never fullscreen ─────────── */
@@ -253,6 +198,22 @@ video {
   text-overflow: ellipsis;
   white-space: nowrap;
   flex: 1;
+  /* Clicking the name in the popup header renames the clip. */
+  cursor: text;
+}
+
+.clip-name:hover { color: var(--accent-strong); }
+
+.clip-name-input {
+  flex: 1;
+  min-width: 0;
+  padding: 3px 8px;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--accent-border);
+  background: var(--panel-raised);
+  color: var(--text);
 }
 
 .clip-details {
@@ -1306,17 +1267,20 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   padding: 16px;
   display: flex;
   flex-wrap: wrap;
-  gap: 14px;
+  gap: var(--card-gap, 14px);
   align-content: flex-start;
   /* Never centre: a short last row has to line up with the rows above it. */
   justify-content: flex-start;
+  /* Column count drives the card width, so the cards resize with the window and
+     still fill the row exactly (no leftover strip on the right). */
+  --card-gap: 14px;
+  --card-cols: 3;
 }
 
 .grid-card {
-  /* Fixed width, no growth: with `flex: 1 1 …` the cards on a short last row
-     stretched to fill the row and looked bigger than every other row. */
-  flex: 0 1 260px;
-  max-width: 260px;
+  /* Exactly one column wide: (100% − the gaps) ÷ columns. Cards in a short last
+     row keep that width instead of stretching to fill the row. */
+  flex: 0 1 calc((100% - (var(--card-cols) - 1) * var(--card-gap)) / var(--card-cols));
   min-width: 0;
   border-radius: var(--radius-md);
   overflow: hidden;
@@ -1336,7 +1300,7 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   position: relative;
   aspect-ratio: 16 / 9;
   overflow: hidden;
-  background: var(--panel);
+  background: var(--panel-raised);
 }
 
 .grid-thumb {
@@ -1347,7 +1311,22 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 }
 
 .grid-thumb-empty {
-  background: linear-gradient(135deg, var(--panel-raised), var(--panel));
+  background: linear-gradient(135deg, var(--panel-raised), rgba(255, 255, 255, 0.02));
+}
+
+/* Favorite marker over the picture — the star action now lives in the
+   right-click menu, so favorited clips still need to be recognizable at rest. */
+.grid-fav-badge {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.7);
+  color: var(--warn);
+  font-size: 11px;
+  line-height: 1.4;
+  pointer-events: none;
 }
 
 .grid-duration {
@@ -1364,64 +1343,6 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   pointer-events: none;
 }
 
-.grid-card-actions-overlay {
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(to top, rgba(0, 0, 0, 0.65) 0%, transparent 50%);
-  display: flex;
-  align-items: flex-end;
-  justify-content: flex-end;
-  padding: 8px;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.15s ease;
-}
-
-.grid-card:hover .grid-card-actions-overlay {
-  opacity: 1;
-  pointer-events: auto;
-}
-
-/* Override the sidebar action styles to work on the overlay */
-.grid-card-actions-overlay .library-actions {
-  width: auto;
-  overflow: visible;
-  opacity: 1;
-  gap: 4px;
-}
-
-.grid-card-actions-overlay .library-fav {
-  opacity: 1;
-  font-size: 16px;
-  width: auto;
-  height: auto;
-  color: #fff;
-}
-
-.grid-card-actions-overlay .library-remove {
-  opacity: 1;
-  font-size: 16px;
-  width: auto;
-  height: auto;
-  color: rgba(255, 255, 255, 0.85);
-}
-
-.grid-card-actions-overlay .library-cloud-delete {
-  opacity: 1;
-  font-size: 15px;
-}
-
-.grid-card-actions-overlay .library-folder-select {
-  opacity: 1;
-  font-size: 11px;
-  background: rgba(0, 0, 0, 0.5);
-  color: rgba(255, 255, 255, 0.85);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  border-radius: var(--radius-sm);
-  padding: 2px 4px;
-  max-width: 90px;
-}
-
 .grid-card-body {
   padding: 8px 10px 10px;
 }
@@ -1433,6 +1354,13 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  /* Clicking the name renames the clip instead of opening it. */
+  cursor: text;
+  border-radius: 4px;
+}
+
+.grid-card-name:hover {
+  color: var(--accent-strong);
 }
 
 .grid-card-meta {
@@ -1451,4 +1379,189 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   background: var(--panel-raised);
   color: var(--text);
   box-sizing: border-box;
+}
+
+/* Column count by window width: the cards grow/shrink with the grid and always
+   fill the row, without ever leaving a short last row with oversized cards. */
+@media (min-width: 1180px) {
+  .grid-cards { --card-cols: 4; }
+}
+
+@media (min-width: 1560px) {
+  .grid-cards { --card-cols: 5; }
+}
+
+@media (max-width: 760px) {
+  .grid-cards { --card-cols: 2; }
+}
+
+@media (max-width: 480px) {
+  .grid-cards { --card-cols: 1; }
+}
+
+/* ─── Clip right-click menu ─────────────────────────────────────────────────── */
+.ctx-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+}
+
+.ctx-menu {
+  position: fixed;
+  min-width: 208px;
+  max-width: 280px;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  background: var(--panel-solid);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.55);
+}
+
+.ctx-title {
+  padding: 4px 8px 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ctx-label {
+  padding: 4px 8px 2px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-faint);
+}
+
+.ctx-empty {
+  padding: 2px 8px 4px;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.ctx-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  font-size: 12px;
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.ctx-item:hover:not(:disabled) {
+  background: var(--panel-hover);
+  color: var(--text);
+}
+
+.ctx-item:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.ctx-item-danger { color: var(--out-color); }
+.ctx-item-danger:hover:not(:disabled) {
+  background: rgba(251, 113, 133, 0.14);
+  color: var(--out-color);
+}
+
+.ctx-icon {
+  width: 14px;
+  flex: none;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-faint);
+}
+
+.ctx-icon.on { color: var(--warn); }
+
+.ctx-sep {
+  height: 1px;
+  margin: 4px 2px;
+  background: var(--border);
+}
+
+/* ─── Delete confirmation ───────────────────────────────────────────────────── */
+.delete-card {
+  max-width: 440px;
+}
+
+.delete-body {
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.delete-name {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.delete-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--panel-raised);
+  cursor: pointer;
+}
+
+.delete-option.disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.delete-option input { margin-top: 2px; }
+
+.delete-option-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.delete-option-text strong {
+  font-size: 12px;
+  color: var(--text);
+}
+
+.delete-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+}
+
+.btn-danger {
+  background: var(--out-color);
+  border: 1px solid var(--out-color);
+  color: #2b0210;
+  padding: 7px 16px;
+  font-weight: 600;
+}
+
+.btn-danger:hover {
+  filter: brightness(1.08);
+  background: var(--out-color);
 }
