@@ -24,6 +24,8 @@ export class ChunkedAudioEngine {
   private readonly trackPaths: string[];
   private readonly totalDur: number;
   private readonly gains: GainNode[];
+  /** Master gain the transport bar's volume/mute acts on — preview only. */
+  private readonly master: GainNode;
 
   private buffers = new Map<string, AudioBuffer>();
   private inflight = new Map<string, Promise<AudioBuffer | null>>();
@@ -40,10 +42,15 @@ export class ChunkedAudioEngine {
     this.ctx = ctx;
     this.trackPaths = trackPaths;
     this.totalDur = totalDur;
+    // Every track gain feeds this one node, which feeds the destination: the
+    // transport's volume/mute is a single multiply on top of the per-track mix,
+    // and the app still registers exactly one output stream with the OS.
+    this.master = ctx.createGain();
+    this.master.connect(ctx.destination);
     this.gains = trackPaths.map((_, i) => {
       const g = ctx.createGain();
       g.gain.value = initialGains[i] ?? 1;
-      g.connect(ctx.destination);
+      g.connect(this.master);
       return g;
     });
   }
@@ -52,6 +59,11 @@ export class ChunkedAudioEngine {
   setTrackGain(i: number, value: number) {
     const g = this.gains[i];
     if (g) g.gain.value = value;
+  }
+
+  /** Master preview volume (0..1). Export ignores it — it mixes the track configs. */
+  setMasterGain(value: number) {
+    this.master.gain.value = Math.max(0, value);
   }
 
   /**
@@ -118,6 +130,7 @@ export class ChunkedAudioEngine {
     this.disposed = true;
     this.stopSources();
     this.gains.forEach(g => g.disconnect());
+    this.master.disconnect();
     this.buffers.clear();
     this.inflight.clear();
   }

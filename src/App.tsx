@@ -11,6 +11,7 @@ import { moveSegment, removeSegment, sequenceDuration, toBackendSegments, type S
 import { isCustomSelectionValid, resolveTargetMb, TARGET_SIZE_PRESETS } from "./exportOptions";
 import { setIn, setOut } from "./trim";
 import { Timeline } from "./Timeline";
+import { PlayerControls } from "./PlayerControls";
 import { useResizable } from "./useResizable";
 import { FirstRunWizard } from "./FirstRunWizard";
 import { SettingsModal } from "./SettingsModal";
@@ -61,6 +62,12 @@ function App() {
   const [diffOpen, setDiffOpen] = useState(false);
   const [storageProvider, setStorageProvider] = useState<string | null>(null);
   const [syncedRels, setSyncedRels] = useState<Set<string>>(new Set());
+  // Playback state for the transport bar. Toggled on play/pause only, so
+  // playback never re-renders the app.
+  const [playing, setPlaying] = useState(false);
+  // Master preview volume/mute: one multiply on top of the per-track mix.
+  const [masterVolume, setMasterVolume] = useState(1);
+  const [masterMuted, setMasterMuted] = useState(false);
   const videoHeight = useResizable({
     axis: "y",
     defaultSize: 50,
@@ -87,6 +94,9 @@ function App() {
   const trackConfigsRef = useRef<TrackConfig[]>([]);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const engineRef = useRef<ChunkedAudioEngine | null>(null);
+  // Master preview gain, mirrored in a ref so a freshly built engine picks up
+  // the current bar setting without rebuilding on every volume change.
+  const masterGainRef = useRef(1);
   // Playback position/state to restore after the video-only source swap remounts
   // the <video> element.
   const restoreAfterSwapRef = useRef<{ time: number; paused: boolean } | null>(null);
@@ -225,6 +235,14 @@ function App() {
     if (videoRef.current) videoRef.current.muted = audioReady;
   }, [audioReady]);
 
+  // Apply the transport bar's master volume to the live engine (and remember it
+  // for engines built later, i.e. the next clip).
+  useEffect(() => {
+    const gain = masterMuted ? 0 : masterVolume;
+    masterGainRef.current = gain;
+    engineRef.current?.setMasterGain(gain);
+  }, [masterVolume, masterMuted]);
+
   // ── Tear down the chunked audio engine ────────────────────────────────────────
   // Deterministic, not GC-driven: the engine holds decoded PCM buffers and live
   // AudioBufferSourceNodes; dispose stops and disconnects everything at once.
@@ -263,6 +281,7 @@ function App() {
       initialGains
     );
     engineRef.current = engine;
+    engine.setMasterGain(masterGainRef.current);
 
     // If video is already playing when tracks become ready, start in sync
     const v = videoRef.current;
@@ -278,6 +297,7 @@ function App() {
 
   // ── Sync the engine when video plays / pauses / seeks ─────────────────────────
   function onVideoPlay() {
+    setPlaying(true);
     const v = videoRef.current;
     if (v) engineRef.current?.play(v.currentTime);
   }
@@ -286,6 +306,7 @@ function App() {
   // app's one OS audio stream survives pause/play cycles (suspending it makes
   // WebKitGTK register a fresh sink-input on every resume).
   function onVideoPause() {
+    setPlaying(false);
     engineRef.current?.pause();
   }
 
@@ -431,6 +452,23 @@ function App() {
     if (videoRef.current) videoRef.current.currentTime = time;
   }
 
+  // ── Transport bar ─────────────────────────────────────────────────────────────
+  function togglePlay() {
+    const v = videoRef.current;
+    if (!v) return;
+    if (v.paused) {
+      v.play().catch(err => console.error("Playback failed:", err));
+    } else {
+      v.pause();
+    }
+  }
+
+  // Dragging the volume slider up is also how you get out of mute.
+  function setPreviewVolume(volume: number) {
+    setMasterVolume(volume);
+    if (volume > 0 && masterMuted) setMasterMuted(false);
+  }
+
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if ((e.target as HTMLElement).tagName === "INPUT") return;
@@ -571,6 +609,7 @@ function App() {
     setInPoint(null);
     setOutPoint(null);
     setStatus(null);
+    setPlaying(false);
 
     // Reset audio state for the new clip
     setAudioReady(false);
@@ -921,7 +960,6 @@ function App() {
                 ref={videoRef}
                 key={previewPath(path, proxyPath, videoOnlyPath)}
                 src={mediaPort ? `http://127.0.0.1:${mediaPort}/file?path=${encodeURIComponent(previewPath(path, proxyPath, videoOnlyPath))}` : undefined}
-                controls
                 muted={audioReady}
                 className="video-player"
                 style={{ maxHeight: `${videoHeight.size}vh` }}
@@ -931,6 +969,7 @@ function App() {
                 onPlaying={onVideoPlay}
                 onWaiting={onVideoWaiting}
                 onPause={onVideoPause}
+                onEnded={onVideoPause}
                 onSeeked={onVideoSeeked}
                 onVolumeChange={onVideoVolumeChange}
                 onError={handleVideoError}
@@ -942,6 +981,20 @@ function App() {
                 onPointerMove={videoHeight.onPointerMove}
                 onPointerUp={videoHeight.onPointerUp}
                 onPointerCancel={videoHeight.onPointerUp}
+              />
+
+              {/* The one and only playback controller — the <video> has no native
+                  controls, so nothing overlays the picture on hover. */}
+              <PlayerControls
+                videoRef={videoRef}
+                duration={meta?.durationSecs ?? 0}
+                playing={playing}
+                onTogglePlay={togglePlay}
+                volume={masterVolume}
+                muted={masterMuted}
+                onVolume={setPreviewVolume}
+                onToggleMute={() => setMasterMuted(m => !m)}
+                onSeek={seekTo}
               />
 
               {proxyStatus && (
