@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
+import type { RefObject } from "react";
 import { formatTimecode } from "./timecode";
+import { useVideoClock } from "./useVideoClock";
 
 interface Props {
   videoRef: RefObject<HTMLVideoElement | null>;
@@ -11,14 +12,77 @@ interface Props {
   muted: boolean;
   onVolume: (volume: number) => void;
   onToggleMute: () => void;
-  onSeek: (time: number) => void;
+  fullscreen: boolean;
+  onToggleFullscreen: () => void;
+}
+
+function PlayIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+      <path d="M7 4.5v15l13-7.5z" fill="currentColor" />
+    </svg>
+  );
+}
+
+function PauseIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+      <rect x="6" y="4.5" width="4" height="15" rx="1" fill="currentColor" />
+      <rect x="14" y="4.5" width="4" height="15" rx="1" fill="currentColor" />
+    </svg>
+  );
+}
+
+/** Plain monochrome speaker: no emoji, so it stays legible at 16px. */
+function SpeakerIcon({ muted }: { muted: boolean }) {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+      <path d="M4 9.5h3.2L12 5.6v12.8L7.2 14.5H4z" fill="currentColor" />
+      {muted ? (
+        <path
+          d="M16 9.5l5 5m0-5l-5 5"
+          stroke="currentColor"
+          strokeWidth="1.7"
+          strokeLinecap="round"
+          fill="none"
+        />
+      ) : (
+        <g stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" fill="none">
+          <path d="M15.4 9.4a4 4 0 0 1 0 5.2" />
+          <path d="M18.1 6.9a7.4 7.4 0 0 1 0 10.2" />
+        </g>
+      )}
+    </svg>
+  );
+}
+
+function FullscreenIcon({ active }: { active: boolean }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width="16"
+      height="16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.7"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      {active ? (
+        <path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5" />
+      ) : (
+        <path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" />
+      )}
+    </svg>
+  );
 }
 
 /**
- * The app's only playback controller: play/pause, scrub, time readout and the
- * master volume for the preview mix. The <video> element is rendered without
- * native `controls`, so nothing pops up over the picture on hover — this bar
- * never hides and exposes no tooltips.
+ * Transport buttons for the popup: play/pause, position readout, mute + master
+ * preview volume and fullscreen. Position scrubbing and trimming live together
+ * on the timeline right above it, so there is exactly one place that moves the
+ * playhead. The <video> has no native controls, so nothing pops up on hover.
  */
 export function PlayerControls({
   videoRef,
@@ -29,117 +93,29 @@ export function PlayerControls({
   muted,
   onVolume,
   onToggleMute,
-  onSeek,
+  fullscreen,
+  onToggleFullscreen,
 }: Props) {
-  const barRef = useRef<HTMLDivElement>(null);
-  // Set while the pointer is down on the bar: the rAF playhead must not fight
-  // the thumb position the user is dragging.
-  const scrubbingRef = useRef(false);
-
-  // Playhead position. Kept local (and read off the element every frame) so
-  // playback never re-renders the app, and so it survives the <video> being
-  // swapped for a proxy/remux. Sub-frame changes bail out via setState.
-  const [currentTime, setCurrentTime] = useState(0);
-  useEffect(() => {
-    let raf = 0;
-    const start = () => {
-      raf = requestAnimationFrame(function tick() {
-        if (!scrubbingRef.current) {
-          const t = videoRef.current?.currentTime ?? 0;
-          setCurrentTime(prev => (Math.abs(t - prev) < 0.03 ? prev : t));
-        }
-        raf = requestAnimationFrame(tick);
-      });
-    };
-    const stop = () => cancelAnimationFrame(raf);
-    const onVisibility = () => (document.hidden ? stop() : start());
-    document.addEventListener("visibilitychange", onVisibility);
-    if (!document.hidden) start();
-    return () => {
-      document.removeEventListener("visibilitychange", onVisibility);
-      stop();
-    };
-  }, [videoRef]);
-
-  const seekAt = useCallback((clientX: number) => {
-    const bar = barRef.current;
-    if (!bar || duration <= 0) return;
-    const { left, width } = bar.getBoundingClientRect();
-    if (width <= 0) return;
-    const time = Math.max(0, Math.min(1, (clientX - left) / width)) * duration;
-    setCurrentTime(time);
-    onSeek(time);
-  }, [duration, onSeek]);
-
-  const playedPct = duration > 0 ? Math.min(100, (currentTime / duration) * 100) : 0;
+  const currentTime = useVideoClock(videoRef);
 
   return (
     <div className="player-controls">
-      <button
-        className="pc-btn"
-        onClick={onTogglePlay}
-        aria-label={playing ? "Pause" : "Play"}
-      >
-        {playing ? "❚❚" : "▶"}
+      <button className="pc-btn" onClick={onTogglePlay} aria-label={playing ? "Pause" : "Play"}>
+        {playing ? <PauseIcon /> : <PlayIcon />}
       </button>
-
-      <div
-        ref={barRef}
-        className="pc-bar"
-        role="slider"
-        tabIndex={0}
-        aria-label="Playback position"
-        aria-valuemin={0}
-        aria-valuemax={Math.round(duration)}
-        aria-valuenow={Math.round(currentTime)}
-        onPointerDown={e => {
-          scrubbingRef.current = true;
-          e.currentTarget.setPointerCapture(e.pointerId);
-          seekAt(e.clientX);
-        }}
-        onPointerMove={e => {
-          if (scrubbingRef.current) seekAt(e.clientX);
-        }}
-        onPointerUp={e => {
-          scrubbingRef.current = false;
-          if (e.currentTarget.hasPointerCapture(e.pointerId)) {
-            e.currentTarget.releasePointerCapture(e.pointerId);
-          }
-        }}
-        onPointerCancel={() => {
-          scrubbingRef.current = false;
-        }}
-        onKeyDown={e => {
-          // Arrow keys nudge the playhead by a second, Home/End jump to the ends.
-          const step = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
-          if (step !== 0) {
-            e.preventDefault();
-            const next = Math.max(0, Math.min(duration, currentTime + step));
-            setCurrentTime(next);
-            onSeek(next);
-          } else if (e.key === "Home" || e.key === "End") {
-            e.preventDefault();
-            const next = e.key === "Home" ? 0 : duration;
-            setCurrentTime(next);
-            onSeek(next);
-          }
-        }}
-      >
-        <div className="pc-track" />
-        <div className="pc-fill" style={{ width: `${playedPct}%` }} />
-        <div className="pc-thumb" style={{ left: `${playedPct}%` }} />
-      </div>
 
       <span className="pc-time">
         {formatTimecode(currentTime)} / {formatTimecode(duration)}
       </span>
+
+      <span className="pc-spacer" />
 
       <button
         className="pc-btn"
         onClick={onToggleMute}
         aria-label={muted ? "Unmute preview" : "Mute preview"}
       >
-        {muted || volume === 0 ? "🔇" : "🔊"}
+        <SpeakerIcon muted={muted || volume === 0} />
       </button>
       <input
         type="range"
@@ -151,6 +127,14 @@ export function PlayerControls({
         className="pc-volume"
         aria-label="Preview volume"
       />
+
+      <button
+        className="pc-btn"
+        onClick={onToggleFullscreen}
+        aria-label={fullscreen ? "Exit fullscreen" : "Fullscreen"}
+      >
+        <FullscreenIcon active={fullscreen} />
+      </button>
     </div>
   );
 }

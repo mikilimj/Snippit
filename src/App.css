@@ -195,6 +195,22 @@
   border-radius: var(--radius-lg);
   box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
   overflow: hidden;
+  /* Dragging the timeline/handles must not select the UI text around it. */
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* The block is a player, not a document — keep text fields and paths selectable. */
+.clip-modal input,
+.clip-modal textarea,
+.settings-path {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+img,
+video {
+  -webkit-user-drag: none;
 }
 
 .clip-modal-header {
@@ -248,10 +264,54 @@
 /* ─── Video player ──────────────────────────────────────────────────────────── */
 .video-player {
   width: 100%;
+  max-height: var(--video-max-height, 50vh);
   background: #000;
   border-radius: var(--radius-md);
   border: 1px solid var(--border);
   flex-shrink: 0;
+  cursor: pointer;
+  /* Clicking the picture toggles playback — drag/select must not get in the way. */
+  -webkit-user-drag: none;
+  user-select: none;
+}
+
+/* ─── Player block: picture + timetable + transport (fullscreen target) ─────── */
+.player-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.player-shell .resize-handle-y { margin: -4px 0; }
+
+.player-shell:fullscreen,
+.player-shell.player-shell-expanded {
+  background: #000;
+  justify-content: center;
+  padding: 16px;
+  gap: 10px;
+}
+
+.player-shell.player-shell-expanded {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+}
+
+.player-shell:fullscreen .video-player,
+.player-shell.player-shell-expanded .video-player {
+  max-height: none;
+  flex: 1;
+  min-height: 0;
+  object-fit: contain;
+  border: none;
+  border-radius: 0;
+}
+
+.player-shell:fullscreen .resize-handle-y,
+.player-shell.player-shell-expanded .resize-handle-y {
+  display: none;
 }
 
 .resize-handle-y {
@@ -350,6 +410,9 @@
   white-space: nowrap;
 }
 
+/* Pushes the sound + fullscreen controls to the right of the bar. */
+.pc-spacer { flex: 1; }
+
 .pc-volume {
   flex: none;
   width: 84px;
@@ -361,13 +424,20 @@
   accent-color: var(--accent);
 }
 
-/* ─── Timeline ──────────────────────────────────────────────────────────────── */
+/* ─── Timeline: scrub surface + trim handles in one bar ─────────────────────── */
 .tl-bar {
   position: relative;
   height: 42px;
   user-select: none;
   touch-action: none;
   flex-shrink: 0;
+  cursor: pointer;
+}
+
+.tl-bar:focus-visible {
+  outline: 2px solid var(--accent-border);
+  outline-offset: 2px;
+  border-radius: 6px;
 }
 
 .tl-track {
@@ -377,6 +447,16 @@
   background: rgba(255, 255, 255, 0.1);
   border: 1px solid var(--border);
   border-radius: 4px;
+}
+
+/* Played portion of the clip, behind the kept in→out range. */
+.tl-played {
+  position: absolute;
+  left: 0;
+  top: 16px; bottom: 16px;
+  background: rgba(255, 255, 255, 0.14);
+  border-radius: 3px;
+  pointer-events: none;
 }
 
 .tl-range {
@@ -433,6 +513,18 @@
   pointer-events: none;
 }
 
+.tl-thumb {
+  position: absolute;
+  top: 50%;
+  width: 11px;
+  height: 11px;
+  margin: -5.5px 0 0 -5.5px;
+  border-radius: 50%;
+  background: var(--text);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+}
+
 .tl-time {
   position: absolute;
   bottom: 0;
@@ -444,21 +536,7 @@
 .tl-time-left { left: 0; }
 .tl-time-right { right: 0; }
 
-/* ─── Trim controls ─────────────────────────────────────────────────────────── */
-.trim-section {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  flex-shrink: 0;
-}
-
-.trim-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
+/* ─── Trim / export controls ────────────────────────────────────────────────── */
 .trim-controls {
   display: flex;
   align-items: center;
@@ -471,6 +549,7 @@
   font-size: 12px;
   color: var(--text-dim);
   font-variant-numeric: tabular-nums;
+  margin-right: auto;
 }
 
 /* ─── Export size picker ────────────────────────────────────────────────────── */
@@ -1183,6 +1262,10 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   height: 100vh;
   background: var(--bg);
   color: var(--text);
+  /* Click-dragging across cards must not paint text with the system selection
+     highlight (it shows up as blue strips over the grid). */
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .grid-header {
