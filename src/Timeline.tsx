@@ -1,22 +1,25 @@
-import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
+import { formatTimecode } from "./timecode";
 
 interface Props {
   duration: number;
   videoRef: RefObject<HTMLVideoElement | null>;
   inPoint: number | null;
   outPoint: number | null;
-  onSeek: (time: number) => void;
+  /** Raw pointer position as a time; the caller clamps it against the other handle. */
+  onChangeIn: (time: number) => void;
+  onChangeOut: (time: number) => void;
 }
 
-function fmt(secs: number) {
-  const m = Math.floor(secs / 60);
-  const s = Math.floor(secs % 60);
-  const d = Math.floor((secs % 1) * 10);
-  return `${m}:${s.toString().padStart(2, "0")}.${d}`;
-}
-
-export function Timeline({ duration, videoRef, inPoint, outPoint, onSeek }: Props) {
+/**
+ * Dual-handle trim slider. It starts out spanning the whole clip (a missing
+ * point means the corresponding clip edge). Dragging either handle moves the
+ * playhead to that exact time as you go, so the picture follows the cut in real
+ * time — there are no separate "set in/out" buttons.
+ */
+export function Timeline({ duration, videoRef, inPoint, outPoint, onChangeIn, onChangeOut }: Props) {
   const barRef = useRef<HTMLDivElement>(null);
+  const dragRef = useRef<"in" | "out" | null>(null);
 
   // The playhead follows the video clock via rAF and stays local to this small
   // component — the app must not re-render on every video timeupdate. Reading
@@ -45,55 +48,89 @@ export function Timeline({ duration, videoRef, inPoint, outPoint, onSeek }: Prop
     };
   }, [videoRef]);
 
-  const seekAt = useCallback((clientX: number) => {
+  const inSecs = inPoint ?? 0;
+  const outSecs = outPoint ?? duration;
+  const toPct = (t: number) => (duration > 0 ? (t / duration) * 100 : 0);
+
+  // Pointer x → time on the clip. Pointer capture keeps the events coming from
+  // the handle even when the pointer runs off the bar mid-drag.
+  function timeAt(clientX: number): number {
     const bar = barRef.current;
-    if (!bar || duration <= 0) return;
+    if (!bar || duration <= 0) return 0;
     const { left, width } = bar.getBoundingClientRect();
-    onSeek(Math.max(0, Math.min(1, (clientX - left) / width)) * duration);
-  }, [duration, onSeek]);
+    if (width <= 0) return 0;
+    return Math.max(0, Math.min(1, (clientX - left) / width)) * duration;
+  }
 
-  const toN = (t: number) => (duration > 0 ? (t / duration) * 100 : 0);
-  const pct = (t: number) => `${toN(t)}%`;
+  function emit(which: "in" | "out", clientX: number) {
+    const t = timeAt(clientX);
+    if (which === "in") onChangeIn(t);
+    else onChangeOut(t);
+  }
 
-  const inPct = inPoint !== null ? toN(inPoint) : null;
-  const outPct = outPoint !== null ? toN(outPoint) : null;
+  function onHandleDown(which: "in" | "out") {
+    return (e: ReactPointerEvent<HTMLDivElement>) => {
+      if (duration <= 0) return;
+      dragRef.current = which;
+      // Scrubbing a cut point shouldn't fight audio playback: park the video so
+      // a handle drag stays a plain scrub.
+      videoRef.current?.pause();
+      e.currentTarget.setPointerCapture(e.pointerId);
+      emit(which, e.clientX);
+    };
+  }
+
+  function onHandleMove(which: "in" | "out") {
+    return (e: ReactPointerEvent<HTMLDivElement>) => {
+      if (dragRef.current !== which) return;
+      emit(which, e.clientX);
+    };
+  }
+
+  function onHandleUp(e: ReactPointerEvent<HTMLDivElement>) {
+    dragRef.current = null;
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    }
+  }
+
+  const handleProps = (which: "in" | "out", t: number) => ({
+    className: `tl-handle tl-${which}`,
+    style: { left: `${toPct(t)}%` },
+    role: "slider",
+    "aria-label": which === "in" ? "Trim start" : "Trim end",
+    "aria-valuemin": 0,
+    "aria-valuemax": Math.round(duration),
+    "aria-valuenow": Number(t.toFixed(1)),
+    onPointerDown: onHandleDown(which),
+    onPointerMove: onHandleMove(which),
+    onPointerUp: onHandleUp,
+    onPointerCancel: onHandleUp,
+  });
 
   return (
-    <div
-      ref={barRef}
-      className="tl-bar"
-      onPointerDown={(e) => {
-        barRef.current?.setPointerCapture(e.pointerId);
-        seekAt(e.clientX);
-      }}
-      onPointerMove={(e) => {
-        if (e.buttons === 1) seekAt(e.clientX);
-      }}
-    >
+    <div ref={barRef} className="tl-bar">
       <div className="tl-track" />
 
-      {inPct !== null && outPct !== null && (
-        <div
-          className="tl-range"
-          style={{ left: `${inPct}%`, width: `${outPct - inPct}%` }}
-        />
-      )}
+      <div
+        className="tl-range"
+        style={{ left: `${toPct(inSecs)}%`, width: `${toPct(outSecs) - toPct(inSecs)}%` }}
+      />
 
-      {inPct !== null && (
-        <div className="tl-handle tl-in" style={{ left: `${inPct}%` }}>
-          <span>I</span>
-        </div>
-      )}
-      {outPct !== null && (
-        <div className="tl-handle tl-out" style={{ left: `${outPct}%` }}>
-          <span>O</span>
-        </div>
-      )}
+      <div {...handleProps("in", inSecs)}>
+        <div className="tl-handle-line" />
+        <span>I</span>
+      </div>
 
-      <div className="tl-cursor" style={{ left: pct(currentTime) }} />
+      <div {...handleProps("out", outSecs)}>
+        <div className="tl-handle-line" />
+        <span>O</span>
+      </div>
 
-      <span className="tl-time tl-time-left">{fmt(currentTime)}</span>
-      <span className="tl-time tl-time-right">{fmt(duration)}</span>
+      <div className="tl-cursor" style={{ left: `${toPct(currentTime)}%` }} />
+
+      <span className="tl-time tl-time-left">{formatTimecode(inSecs)}</span>
+      <span className="tl-time tl-time-right">{formatTimecode(outSecs)}</span>
     </div>
   );
 }
