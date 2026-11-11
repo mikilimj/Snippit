@@ -96,6 +96,21 @@ export default function LibraryGrid({
   return (
     <div className="grid-view">
       <div className="grid-header">
+        {/* Folder filters share the header row: chips on the left, actions on
+            the right, so the grid gets one strip of chrome instead of two. */}
+        <FolderRail
+          folders={folders}
+          activeView={activeView}
+          onSelectView={onSelectView}
+          onDeleteFolder={onDeleteFolder}
+          creatingFolder={creatingFolder}
+          newFolderName={newFolderName}
+          onNewFolderNameChange={onNewFolderNameChange}
+          onCreateFolder={onCreateFolder}
+          onCancelCreateFolder={onCancelCreateFolder}
+          onStartCreateFolder={onStartCreateFolder}
+        />
+
         <div className="grid-toolbar">
           <button
             className="btn-sm"
@@ -110,18 +125,6 @@ export default function LibraryGrid({
           <button className="btn-sm" onClick={onPickClip}>+ Open</button>
         </div>
       </div>
-      <FolderRail
-        folders={folders}
-        activeView={activeView}
-        onSelectView={onSelectView}
-        onDeleteFolder={onDeleteFolder}
-        creatingFolder={creatingFolder}
-        newFolderName={newFolderName}
-        onNewFolderNameChange={onNewFolderNameChange}
-        onCreateFolder={onCreateFolder}
-        onCancelCreateFolder={onCancelCreateFolder}
-        onStartCreateFolder={onStartCreateFolder}
-      />
       {library.length === 0 ? (
         <p className="grid-empty">
           {activeView.kind === "all"
