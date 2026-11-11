@@ -82,6 +82,12 @@ into one output stream (video stream-copied, audio re-encoded to AAC).
   `.clip-modal-backdrop`, which hosts the player, audio panel, trim slider,
   export controls and sequence panel. The popup closes on the header `×`, a
   mousedown on the backdrop, or `Escape`.
+- `TitleBar.tsx` — the custom window chrome. The OS titlebar is disabled
+  (`decorations: false` in `tauri.conf.json`), so this slim bar is rendered by the
+  app on every screen: brand + Tauri drag region (`data-tauri-drag-region`) on the
+  left, hand-drawn underscore / square / cross controls on the right, and invisible edge
+  grips (`startResizeDragging`) that restore window resizing on Linux. Its height
+  is the `--titlebar-h` token from `theme.css`, which the screens offset against.
 - `LibraryGrid.tsx` / `FolderRail.tsx` / `ClipContextMenu.tsx` — the clip grid
   (cards, folder chips). Per-clip actions live in the right-click menu — favourites
   first, then the folder list, then delete — and card names rename in place on a

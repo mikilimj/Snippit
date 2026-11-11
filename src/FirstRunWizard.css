@@ -3,7 +3,8 @@
 
 .wiz-stage {
   position: fixed;
-  inset: 0;
+  /* Sit below the custom window chrome (src/TitleBar.tsx). */
+  inset: var(--titlebar-h) 0 0 0;
   display: flex;
   align-items: center;
   justify-content: center;

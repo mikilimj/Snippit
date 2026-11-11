@@ -4,7 +4,6 @@ import type { LibraryView } from "./libraryView";
 import { clipRelName } from "./libraryPaths";
 import FolderRail from "./FolderRail";
 import ClipContextMenu from "./ClipContextMenu";
-import logo from "./assets/logo.png";
 
 interface LibraryGridProps {
   library: ClipRow[];
@@ -97,10 +96,6 @@ export default function LibraryGrid({
   return (
     <div className="grid-view">
       <div className="grid-header">
-        <div className="brand-row">
-          <img className="brand-logo" src={logo} alt="" />
-          <span className="brand-name">Snippit</span>
-        </div>
         <div className="grid-toolbar">
           <button
             className="btn-sm"

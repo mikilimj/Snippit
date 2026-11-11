@@ -1,27 +1,117 @@
 /* ─── Editor UI — consumes the Midnight aurora tokens from theme.css ─────────── */
 
-.brand-row {
+/* ─── Custom window chrome ──────────────────────────────────────────────────────
+   The OS titlebar is disabled (`decorations: false`), so this slim bar is the only
+   chrome: brand + drag region on the left, window controls on the right. Its
+   height is the `--titlebar-h` token, which the screens below offset against. */
+
+.titlebar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: var(--titlebar-h);
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 12px;
+  background: var(--panel-solid);
   border-bottom: 1px solid var(--border);
-  flex-shrink: 0;
+  z-index: 90;
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: default;
 }
 
-.brand-logo {
-  width: 22px;
-  height: 22px;
-  border-radius: 6px;
+/* Whole subtree drags (`data-tauri-drag-region="deep"`); the buttons below are
+   clickable elements, which Tauri's drag script hit-tests out. */
+.titlebar-drag {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 12px;
+  overflow: hidden;
+}
+
+.titlebar-logo {
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
   display: block;
+  flex: none;
 }
 
-.brand-name {
-  font-size: 14px;
-  font-weight: 700;
-  letter-spacing: 0.01em;
+.titlebar-name {
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.titlebar-controls {
+  display: flex;
+  align-items: stretch;
+  height: 100%;
+  flex: none;
+}
+
+/* Minimal geometric glyphs (underscore / square-or-restore / cross) drawn as inline
+   SVG, so no icon font or asset is needed and they stay crisp at 10px. */
+.titlebar-btn {
+  width: 42px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.titlebar-btn:hover {
+  background: var(--panel-hover);
   color: var(--text);
 }
+
+.titlebar-btn:active {
+  background: rgba(255, 255, 255, 0.11);
+}
+
+.titlebar-btn-close:hover {
+  background: #e81123;
+  color: #fff;
+}
+
+.titlebar-btn-close:active {
+  background: #b10a1a;
+  color: #fff;
+}
+
+/* Invisible edge grips: an undecorated window loses the WM's resize borders
+   (notably on Linux), so these hand the drag to the window server directly. */
+.window-resize-layer {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 95;
+}
+
+.window-resize-handle {
+  position: absolute;
+  pointer-events: auto;
+}
+
+.rz-s  { left: 0; right: 0; bottom: 0; height: 4px;  cursor: ns-resize; }
+.rz-e  { top: 0; right: 0; bottom: 0; width: 4px;   cursor: ew-resize; }
+.rz-w  { top: 0; left: 0; bottom: 0;  width: 4px;   cursor: ew-resize; }
+.rz-sw { left: 0; bottom: 0;  width: 12px; height: 12px; cursor: nesw-resize; }
+.rz-se { right: 0; bottom: 0; width: 12px; height: 12px; cursor: nwse-resize; }
 
 .library-remove {
   flex: none;
@@ -121,7 +211,8 @@
 /* ─── Clip popup: the editor floats over the grid, never fullscreen ─────────── */
 .clip-modal-backdrop {
   position: fixed;
-  inset: 0;
+  /* Start below the window chrome so the bar (and its controls) stay live. */
+  inset: var(--titlebar-h) 0 0 0;
   background: rgba(0, 0, 0, 0.55);
   display: flex;
   align-items: center;
@@ -257,7 +348,8 @@ video {
 
 .player-shell.player-shell-expanded {
   position: fixed;
-  inset: 0;
+  /* In-window fullscreen fallback: keep the window chrome reachable. */
+  inset: var(--titlebar-h) 0 0 0;
   z-index: 60;
 }
 
@@ -626,7 +718,8 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 /* ─── Settings modal (spec §4.7 folder relocation) ──────────────────────────── */
 .modal-backdrop {
   position: fixed;
-  inset: 0;
+  /* Below the custom window chrome (--titlebar-h) so it stays clickable. */
+  inset: var(--titlebar-h) 0 0 0;
   background: rgba(0, 0, 0, 0.55);
   display: flex;
   align-items: center;
@@ -1222,6 +1315,8 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   display: flex;
   flex-direction: column;
   height: 100vh;
+  /* Sit under the custom window chrome instead of behind it. */
+  padding-top: var(--titlebar-h);
   background: var(--bg);
   color: var(--text);
   /* Click-dragging across cards must not paint text with the system selection
@@ -1233,17 +1328,10 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .grid-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   padding: 10px 16px;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
-}
-
-/* The brand block is a standalone bar elsewhere; inside the grid header it
-   should sit flush, without its own padding and underline. */
-.grid-header .brand-row {
-  padding: 0;
-  border-bottom: none;
 }
 
 .grid-toolbar {

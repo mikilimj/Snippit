@@ -13,6 +13,7 @@ import { isCustomSelectionValid, resolveTargetMb, TARGET_SIZE_PRESETS } from "./
 import { setIn, setOut } from "./trim";
 import { Timeline } from "./Timeline";
 import { PlayerControls } from "./PlayerControls";
+import TitleBar from "./TitleBar";
 import { useResizable } from "./useResizable";
 import { FirstRunWizard } from "./FirstRunWizard";
 import { SettingsModal } from "./SettingsModal";
@@ -986,11 +987,18 @@ function App() {
 
   // ── Render ──────────────────────────────────────────────────────────────────
   if (appRoot === undefined) {
-    return null;
+    // Still checking the setup state: only the window chrome, so the window can
+    // always be moved, minimized or closed.
+    return <TitleBar />;
   }
 
   if (appRoot === null) {
-    return <FirstRunWizard onComplete={handleSetupComplete} />;
+    return (
+      <>
+        <TitleBar />
+        <FirstRunWizard onComplete={handleSetupComplete} />
+      </>
+    );
   }
 
   // The grid is the whole app; a clip opens in a floating editor popup on top of
@@ -999,6 +1007,7 @@ function App() {
   // drag that starts inside never registers as an outside click.
   return (
     <>
+      <TitleBar />
       {settingsOpen && (
         <SettingsModal
           onClose={() => setSettingsOpen(false)}
