@@ -55,7 +55,7 @@ new Cargo dependencies), React/TypeScript, Vitest, `@tauri-apps/plugin-dialog`.
   - `pub struct SetupSettings { pub ingestion_mode: String, pub source_folder: Option<String>, pub created_at: u64 }`
   - `#[derive(Clone)] pub struct SetupResult { pub root_path: String, pub warnings: Vec<String> }` (serialized as `{"rootPath": ..., "warnings": [...]}`)
 
-- [ ] **Step 1: Write `src-tauri/src/setup.rs` with full implementation and tests together**
+- [x] **Step 1: Write `src-tauri/src/setup.rs` with full implementation and tests together**
 
 This module has no Tauri dependency, so implementation and tests are written together
 in one file (matching `export.rs`'s style) rather than split into separate RED/GREEN
@@ -387,7 +387,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Register the module in `src-tauri/src/lib.rs`**
+- [x] **Step 2: Register the module in `src-tauri/src/lib.rs`**
 
 Add `pub mod setup;` alongside the existing `pub mod export;` line (near the top of
 the file, with the other `mod`/`pub mod` declarations):
@@ -399,7 +399,7 @@ pub mod setup;
 mod media_server;
 ```
 
-- [ ] **Step 3: Run the unit tests and verify they pass**
+- [x] **Step 3: Run the unit tests and verify they pass**
 
 Run: `cd src-tauri && cargo test --lib setup::`
 Expected: 14 tests pass (`is_video_extension_matches_known_containers_case_insensitively`,
@@ -415,7 +415,7 @@ Expected: 14 tests pass (`is_video_extension_matches_known_containers_case_insen
 `complete_setup_at_import_mode_copies_files_from_source`,
 `complete_setup_at_import_mode_without_source_folder_errors`).
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add src-tauri/src/setup.rs src-tauri/src/lib.rs
@@ -439,7 +439,7 @@ git commit -m "feat: add pure filesystem logic for first-run setup"
   `check_path_writable(path: String) -> bool`,
   `complete_setup(root_path: String, ingestion_mode: String, source_folder: Option<String>) -> Result<setup::SetupResult, String>`.
 
-- [ ] **Step 1: Add the three commands to `src-tauri/src/lib.rs`**
+- [x] **Step 1: Add the three commands to `src-tauri/src/lib.rs`**
 
 Add these new functions after the existing `export_trim` command (before the
 `#[cfg_attr(mobile, ...)] pub fn run()` block):
@@ -475,7 +475,7 @@ fn complete_setup(
 }
 ```
 
-- [ ] **Step 2: Register the commands in the `invoke_handler`**
+- [x] **Step 2: Register the commands in the `invoke_handler`**
 
 In the same file, update the `tauri::generate_handler!` call inside `pub fn run()`:
 
@@ -492,13 +492,13 @@ In the same file, update the `tauri::generate_handler!` call inside `pub fn run(
         ])
 ```
 
-- [ ] **Step 3: Verify the crate builds**
+- [x] **Step 3: Verify the crate builds**
 
 Run: `cd src-tauri && cargo build`
 Expected: builds with no errors (warnings about unused imports, if any, should be
 fixed before moving on).
 
-- [ ] **Step 4: Write the integration test**
+- [x] **Step 4: Write the integration test**
 
 Create `src-tauri/tests/setup_integration.rs`:
 
@@ -541,18 +541,18 @@ fn complete_setup_end_to_end_import_mode_populates_clips_and_settings() {
 }
 ```
 
-- [ ] **Step 5: Run the integration test and verify it passes**
+- [x] **Step 5: Run the integration test and verify it passes**
 
 Run: `cd src-tauri && cargo test --test setup_integration`
 Expected: `complete_setup_end_to_end_import_mode_populates_clips_and_settings ... ok`
 
-- [ ] **Step 6: Run the full Rust test suite to confirm nothing else broke**
+- [x] **Step 6: Run the full Rust test suite to confirm nothing else broke**
 
 Run: `cd src-tauri && cargo test`
 Expected: all tests pass (existing `export::` unit tests, existing
 `trim_integration` test, and the new `setup::` + `setup_integration` tests).
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src-tauri/src/lib.rs src-tauri/tests/setup_integration.rs
@@ -573,7 +573,7 @@ git commit -m "feat: wire up first-run setup Tauri commands"
   - `export function canContinueFromRootStep(rootPath: string | null): boolean`
   - `export function canFinishIngestionStep(mode: IngestionMode | null, sourceFolder: string | null): boolean`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `src/wizardValidation.test.ts`:
 
@@ -609,12 +609,12 @@ describe("canFinishIngestionStep", () => {
 });
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `npx vitest run wizardValidation`
 Expected: FAIL — `Cannot find module './wizardValidation'`
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 Create `src/wizardValidation.ts`:
 
@@ -637,12 +637,12 @@ export function canFinishIngestionStep(
 }
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `npx vitest run wizardValidation`
 Expected: PASS — 5 tests pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/wizardValidation.ts src/wizardValidation.test.ts
@@ -668,7 +668,7 @@ git commit -m "feat: add pure validation logic for first-run wizard steps"
   - `export function completeSetup(rootPath: string, ingestionMode: IngestionMode, sourceFolder: string | null): Promise<SetupResult>` (in `api.ts`)
   - `export function FirstRunWizard(props: { onComplete: (result: SetupResult) => void }): JSX.Element` (in `FirstRunWizard.tsx`)
 
-- [ ] **Step 1: Add API bindings to `src/api.ts`**
+- [x] **Step 1: Add API bindings to `src/api.ts`**
 
 Add these exports at the end of `src/api.ts` (after the existing `exportTrim`
 function):
@@ -700,7 +700,7 @@ export function completeSetup(
 }
 ```
 
-- [ ] **Step 2: Create `src/FirstRunWizard.css`**
+- [x] **Step 2: Create `src/FirstRunWizard.css`**
 
 ```css
 .wiz-stage {
@@ -840,7 +840,7 @@ export function completeSetup(
 .wiz-next:disabled { opacity: .4; cursor: default; filter: none; box-shadow: none; }
 ```
 
-- [ ] **Step 3: Create `src/FirstRunWizard.tsx`**
+- [x] **Step 3: Create `src/FirstRunWizard.tsx`**
 
 ```tsx
 import { useState } from "react";
@@ -1030,14 +1030,14 @@ export function FirstRunWizard({ onComplete }: FirstRunWizardProps) {
 }
 ```
 
-- [ ] **Step 4: Type-check the project**
+- [x] **Step 4: Type-check the project**
 
 Run: `npx tsc --noEmit`
 Expected: no errors (this only type-checks; `FirstRunWizard` isn't wired into `App.tsx`
 yet, so there's no unused-export warning — `tsc` doesn't flag unused exports by
 default).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/api.ts src/FirstRunWizard.tsx src/FirstRunWizard.css
@@ -1055,7 +1055,7 @@ git commit -m "feat: add FirstRunWizard component with Midnight aurora backgroun
 - Consumes: `getAppRoot`, `type SetupResult` from `src/api.ts` (Task 4);
   `FirstRunWizard` from `src/FirstRunWizard.tsx` (Task 4).
 
-- [ ] **Step 1: Add imports**
+- [x] **Step 1: Add imports**
 
 In `src/App.tsx`, update the existing import block near the top of the file:
 
@@ -1070,7 +1070,7 @@ import { FirstRunWizard } from "./FirstRunWizard";
 import "./App.css";
 ```
 
-- [ ] **Step 2: Add root-gating state and effect**
+- [x] **Step 2: Add root-gating state and effect**
 
 Inside the `App` function, add this state near the top (right after the existing
 `const [mediaPort, setMediaPort] = useState<number | null>(null);` line):
@@ -1091,7 +1091,7 @@ block:
   }, []);
 ```
 
-- [ ] **Step 3: Add the setup-complete handler**
+- [x] **Step 3: Add the setup-complete handler**
 
 Add this function inside `App`, near `doExport`/`openClip` (any point after `status`
 state is declared):
@@ -1105,7 +1105,7 @@ state is declared):
   }
 ```
 
-- [ ] **Step 4: Branch the render on `appRoot`**
+- [x] **Step 4: Branch the render on `appRoot`**
 
 Find the `// ── Render` comment and the `return (` that starts with
 `<div className="app-layout">`. Insert the gating branches immediately before that
@@ -1127,12 +1127,12 @@ existing `return (`:
 
 (The rest of the existing JSX inside that `return` block is unchanged.)
 
-- [ ] **Step 5: Type-check and build**
+- [x] **Step 5: Type-check and build**
 
 Run: `npx tsc --noEmit && npm run build`
 Expected: both succeed with no errors.
 
-- [ ] **Step 6: Manual smoke test**
+- [x] **Step 6: Manual smoke test**
 
 Run: `npm run tauri dev`
 
@@ -1157,7 +1157,7 @@ Verify:
    (or reuse a clip from earlier manual testing) and confirm it's copied into
    `Clips/` after Finish.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/App.tsx

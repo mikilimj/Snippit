@@ -29,7 +29,7 @@
 - Modify (import path `clipsnip_lib::` → `snippit_lib::`, one or more occurrences each): `src-tauri/tests/proxy_integration.rs:3`, `src-tauri/tests/preview_audio_integration.rs:3`, `src-tauri/tests/thumbnail_integration.rs:3`, `src-tauri/tests/vaapi_smoke.rs:9`, `src-tauri/tests/setup_integration.rs:1`, `src-tauri/tests/trim_integration.rs:3`, `src-tauri/tests/sync_integration.rs:29,30,34,35,40,45,47,53,56,57,59` (also the local-var literal `clipsnip:` remote-name-prefixed path strings in this file get updated together with Task 4, since they encode the remote name), `src-tauri/tests/compress_integration.rs:3`, `src-tauri/tests/sequence_integration.rs:3`
 - Regenerate: `src-tauri/Cargo.lock` (automatic, via build/check in the verify step)
 
-- [ ] **Step 1: Edit `Cargo.toml`**
+- [x] **Step 1: Edit `Cargo.toml`**
 
 In `src-tauri/Cargo.toml`, change:
 ```toml
@@ -52,7 +52,7 @@ to:
 name = "snippit_lib"
 ```
 
-- [ ] **Step 2: Update `main.rs`**
+- [x] **Step 2: Update `main.rs`**
 
 In `src-tauri/src/main.rs`, change:
 ```rust
@@ -63,16 +63,16 @@ to:
     snippit_lib::run()
 ```
 
-- [ ] **Step 3: Update every integration test's crate import**
+- [x] **Step 3: Update every integration test's crate import**
 
 In each of the 8 files listed above under `src-tauri/tests/`, replace every `clipsnip_lib::` with `snippit_lib::` (this is a compile-time requirement, not cosmetic — the crate no longer exists under the old name after Step 1).
 
-- [ ] **Step 4: Regenerate Cargo.lock and verify the build**
+- [x] **Step 4: Regenerate Cargo.lock and verify the build**
 
 Run: `cd src-tauri && cargo check --tests 2>&1 | tail -40`
 Expected: compiles cleanly. `git diff Cargo.lock` should show only the local package's `name` field changing (from `clipsnip`/`clipsnip_lib` to `snippit`/`snippit_lib`), no dependency version changes.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src-tauri/Cargo.toml src-tauri/Cargo.lock src-tauri/src/main.rs src-tauri/tests/
@@ -88,7 +88,7 @@ git commit -m "chore: rename Rust crate clipsnip -> snippit"
 - Modify: `src-tauri/capabilities/default.json:4`
 - Modify: `index.html:7`
 
-- [ ] **Step 1: Edit `tauri.conf.json`**
+- [x] **Step 1: Edit `tauri.conf.json`**
 
 Change:
 ```json
@@ -115,7 +115,7 @@ to:
         "title": "Snippit",
 ```
 
-- [ ] **Step 2: Edit `capabilities/default.json`**
+- [x] **Step 2: Edit `capabilities/default.json`**
 
 Change:
 ```json
@@ -126,7 +126,7 @@ to:
   "description": "Default capability for Snippit",
 ```
 
-- [ ] **Step 3: Edit `index.html`**
+- [x] **Step 3: Edit `index.html`**
 
 Change:
 ```html
@@ -137,12 +137,12 @@ to:
     <title>Snippit</title>
 ```
 
-- [ ] **Step 4: Verify with a dev run**
+- [x] **Step 4: Verify with a dev run**
 
 Run: `npm run tauri dev`
 Expected: native window opens titled "Snippit". Close it (Ctrl-C) once confirmed.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src-tauri/tauri.conf.json src-tauri/capabilities/default.json index.html
@@ -161,7 +161,7 @@ git commit -m "chore: rebrand app identity to Snippit"
 - Modify: `src/theme.css:1`
 - Modify: `src/wizardValidation.test.ts:9`
 
-- [ ] **Step 1: `App.tsx` — localStorage keys and headings**
+- [x] **Step 1: `App.tsx` — localStorage keys and headings**
 
 Line 71: `storageKey: "clipsnip:sidebarWidth",` → `storageKey: "snippit:sidebarWidth",`
 Line 78: `storageKey: "clipsnip:videoMaxHeightVh",` → `storageKey: "snippit:videoMaxHeightVh",`
@@ -170,7 +170,7 @@ Line 1071: `<h1>ClipSnip</h1>` → `<h1>Snippit</h1>`
 
 (Renaming the localStorage keys means any existing user's saved sidebar/video-panel sizes reset to defaults on first load post-rename — consistent with the identifier reset already accepted in Task 2.)
 
-- [ ] **Step 2: `FirstRunWizard.tsx` — wizard copy and suggested folder name**
+- [x] **Step 2: `FirstRunWizard.tsx` — wizard copy and suggested folder name**
 
 Line 61: `const suggested = await join(await videoDir(), "ClipSnip");` → `const suggested = await join(await videoDir(), "Snippit");`
 Line 158: `<div className="wiz-title">Welcome to ClipSnip</div>` → `Welcome to Snippit`
@@ -180,14 +180,14 @@ Line 188: `ClipSnip can't write to this folder — choose a different one.` → 
 Line 206: `<div className="wiz-title">How should ClipSnip get your clips?</div>` → `How should Snippit get your clips?`
 Line 218: `<div className="wiz-mode-desc">Copy clips from a folder into ClipSnip now.</div>` → `... into Snippit now.`
 
-- [ ] **Step 3: `StorageSettings.tsx`, `SettingsModal.tsx`, `theme.css`, `wizardValidation.test.ts`**
+- [x] **Step 3: `StorageSettings.tsx`, `SettingsModal.tsx`, `theme.css`, `wizardValidation.test.ts`**
 
 `StorageSettings.tsx:192`: `placeholder="/ClipSnip"` → `placeholder="/Snippit"`
 `SettingsModal.tsx:101`: `defaultPath: "clipsnip-library.zip"` → `defaultPath: "snippit-library.zip"`
 `theme.css:1`: comment `/* ─── ClipSnip "Midnight aurora" theme tokens ...` → `/* ─── Snippit "Midnight aurora" theme tokens ...`
 `wizardValidation.test.ts:9`: `expect(canContinueFromRootStep("/home/user/ClipSnip")).toBe(true);` → `.../home/user/Snippit`
 
-- [ ] **Step 4: Run frontend checks**
+- [x] **Step 4: Run frontend checks**
 
 Run: `npx vitest run`
 Expected: all tests pass (the only test touched, `wizardValidation.test.ts`, doesn't assert on the string's content beyond path validity, so this is a safe rename).
@@ -195,7 +195,7 @@ Expected: all tests pass (the only test touched, `wizardValidation.test.ts`, doe
 Run: `npm run build`
 Expected: `tsc` + vite build succeed with no errors.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/App.tsx src/FirstRunWizard.tsx src/StorageSettings.tsx src/SettingsModal.tsx src/theme.css src/wizardValidation.test.ts
@@ -211,7 +211,7 @@ git commit -m "chore: rebrand frontend copy to Snippit"
 - Modify: `src-tauri/src/lib.rs:1285,1390,1422,1423,1932,2246`
 - Modify (test/temp-file prefix strings only, cosmetic): `src-tauri/tests/sync_integration.rs:22,27,34` (the `ClipSnip`/`clipsnip` literals not already handled in Task 1), `src-tauri/src/library.rs:850,874`, `src-tauri/src/bundle.rs:163,194`, `src-tauri/src/watcher.rs:73`, `src-tauri/src/relocate.rs:215`, `src-tauri/src/setup.rs:121,213`, `src-tauri/src/lib.rs:203,260,492,579,798,851`, `src-tauri/tests/preview_audio_integration.rs:23,60,90,125,126`, `src-tauri/tests/proxy_integration.rs:10,11`, `src-tauri/tests/thumbnail_integration.rs:8,9`, `src-tauri/tests/trim_integration.rs:21,22`, `src-tauri/tests/compress_integration.rs:10,11,12,56,57`, `src-tauri/tests/sequence_integration.rs:24,25,26,27,92,93`, `src-tauri/tests/vaapi_smoke.rs:53,54,83,84,85,124`
 
-- [ ] **Step 1: `remote.rs` — the constant, the folder segment, doc comments, and unit tests**
+- [x] **Step 1: `remote.rs` — the constant, the folder segment, doc comments, and unit tests**
 
 Change the doc comment:
 ```rust
@@ -252,7 +252,7 @@ to:
 
 In the `#[cfg(test)]` module, update every literal string that hardcodes the old remote name or folder segment so the assertions match the new constant/builder output — replace each occurrence of `clipsnip` with `snippit` and `ClipSnip` with `Snippit` in the test bodies (lines 285, 305, 310–312, 317, 319, 322 per the pre-edit grep — re-grep after editing to confirm none remain: `grep -in clipsnip src-tauri/src/remote.rs` should return nothing).
 
-- [ ] **Step 2: `lib.rs` — tray menu label and comments**
+- [x] **Step 2: `lib.rs` — tray menu label and comments**
 
 Change the user-visible tray menu item:
 ```rust
@@ -265,7 +265,7 @@ to:
 
 Update the surrounding comments (lines 1285, 1390, 1422–1423, 1932) that reference "ClipSnip" or the `clipsnip` remote name in prose, replacing with "Snippit"/`snippit` to match Step 1.
 
-- [ ] **Step 3: Batch-rename cosmetic temp-file-prefix literals**
+- [x] **Step 3: Batch-rename cosmetic temp-file-prefix literals**
 
 These are internal scratch-file name prefixes used only by tests/temp dirs (e.g. `"clipsnip_test_chunk_{}_{start}_{dur}.wav"`, `"clipsnip_export_{}"`, `"clipsnip_bundle_{}"` etc.) — they carry no functional meaning tied to the app's identity, but since Task 1 already touches these same files for the crate-import rename, replace `clipsnip` with `snippit` in these literals too while you're in the file, for consistency. Run a targeted sweep:
 
@@ -275,17 +275,17 @@ grep -rl "clipsnip" src-tauri/src src-tauri/tests | xargs sed -i '' 's/clipsnip/
 
 (macOS `sed -i ''` syntax — adjust for Linux/CI if run elsewhere.) This is safe as a blanket substitution in these two directories specifically because Task 1 and Steps 1–2 above have already handled every semantically-load-bearing occurrence by hand, and no other case-variant of the string exists there per the original repo-wide grep.
 
-- [ ] **Step 4: Run the Rust test suite**
+- [x] **Step 4: Run the Rust test suite**
 
 Run: `cd src-tauri && cargo test 2>&1 | tail -60`
 Expected: all unit and integration tests pass, including `remote.rs`'s unit tests and `sync_integration.rs` (which exercises a real local rclone remote named `snippit` end-to-end).
 
-- [ ] **Step 5: Confirm no stragglers**
+- [x] **Step 5: Confirm no stragglers**
 
 Run: `grep -rin clipsnip src-tauri/src src-tauri/tests`
 Expected: no output.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src-tauri/src src-tauri/tests
@@ -300,7 +300,7 @@ git commit -m "chore: rebrand internal Rust identifiers and tray menu to Snippit
 - Modify: `package.json:2`
 - Modify: `package-lock.json` (top-level `name` field and the `""` package entry's `name` field)
 
-- [ ] **Step 1: Edit `package.json`**
+- [x] **Step 1: Edit `package.json`**
 
 Change:
 ```json
@@ -311,12 +311,12 @@ to:
   "name": "snippit",
 ```
 
-- [ ] **Step 2: Regenerate the lockfile**
+- [x] **Step 2: Regenerate the lockfile**
 
 Run: `npm install`
 Expected: `package-lock.json`'s two `"name": "clipsnip"` occurrences (top-level and the `""`-keyed root package) update to `"snippit"` automatically; no dependency versions should change. Confirm with `git diff package-lock.json` — only `name` fields should differ (plus whatever pre-existing version-bump diff was already present before this plan, if not yet committed).
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add package.json package-lock.json
@@ -331,7 +331,7 @@ git commit -m "chore: rename npm package clipsnip -> snippit"
 - Modify: `README.md:2,5,13,24,58,73,74,94,100,122,130`
 - Modify: `CLAUDE.md:24`
 
-- [ ] **Step 1: Edit `README.md`**
+- [x] **Step 1: Edit `README.md`**
 
 Replace, line by line:
 - L2: `alt="ClipSnip logo"` → `alt="Snippit logo"`
@@ -348,7 +348,7 @@ Replace, line by line:
 
 (Note: the `<img src="logo.png">` file itself is untouched by this task — if the logo image has "ClipSnip" baked into the artwork as a wordmark, that's a design asset that needs to be redrawn separately; this plan only covers text/code.)
 
-- [ ] **Step 2: Edit `CLAUDE.md`**
+- [x] **Step 2: Edit `CLAUDE.md`**
 
 Change:
 ```markdown
@@ -359,12 +359,12 @@ to:
 Snippit is a Tauri 2 desktop app: a React/TypeScript frontend (`src/`) in a native
 ```
 
-- [ ] **Step 3: Verify**
+- [x] **Step 3: Verify**
 
 Run: `grep -in clipsnip README.md CLAUDE.md`
 Expected: no output.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add README.md CLAUDE.md
@@ -381,7 +381,7 @@ git commit -m "docs: rebrand README and CLAUDE.md to Snippit"
 - Rename file: `packaging/aur/snippit/clipsnip.desktop` → `packaging/aur/snippit/snippit.desktop`
 - Modify: `packaging/aur/snippit/PKGBUILD`, `packaging/aur/snippit/snippit.desktop`, `packaging/aur/snippit-bin/PKGBUILD`
 
-- [ ] **Step 1: Rename the directories and desktop file with git**
+- [x] **Step 1: Rename the directories and desktop file with git**
 
 ```bash
 git mv packaging/aur/clipsnip packaging/aur/snippit
@@ -389,7 +389,7 @@ git mv packaging/aur/clipsnip-bin packaging/aur/snippit-bin
 git mv packaging/aur/snippit/clipsnip.desktop packaging/aur/snippit/snippit.desktop
 ```
 
-- [ ] **Step 2: Edit `packaging/aur/snippit/snippit.desktop`**
+- [x] **Step 2: Edit `packaging/aur/snippit/snippit.desktop`**
 
 Replace all four fields:
 ```ini
@@ -409,7 +409,7 @@ StartupWMClass=ClipSnip
 ```
 → `StartupWMClass=Snippit`
 
-- [ ] **Step 3: Edit `packaging/aur/snippit/PKGBUILD`**
+- [x] **Step 3: Edit `packaging/aur/snippit/PKGBUILD`**
 
 Replace:
 - `pkgname=clipsnip` → `pkgname=snippit`
@@ -421,7 +421,7 @@ Replace:
 - `install -Dm644 "$srcdir/clipsnip.desktop" ...` → `"$srcdir/snippit.desktop"`, and the destination `.../applications/clipsnip.desktop` → `.../applications/snippit.desktop`
 - all four icon-install lines' `.../apps/clipsnip.png` → `.../apps/snippit.png`
 
-- [ ] **Step 4: Edit `packaging/aur/snippit-bin/PKGBUILD`**
+- [x] **Step 4: Edit `packaging/aur/snippit-bin/PKGBUILD`**
 
 Replace:
 - `pkgname=clipsnip-bin` → `pkgname=snippit-bin`
@@ -431,12 +431,12 @@ Replace:
 - `source=("$url/releases/download/v$pkgver/ClipSnip_${pkgver}_amd64.deb")` → `.../Snippit_${pkgver}_amd64.deb`
 - the comment `# them next to /usr/bin/clipsnip, ...` → `/usr/bin/snippit`
 
-- [ ] **Step 5: Verify no stragglers**
+- [x] **Step 5: Verify no stragglers**
 
 Run: `grep -rin clipsnip packaging/`
 Expected: no output.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add packaging/
@@ -450,7 +450,7 @@ git commit -m "chore: rename AUR packages clipsnip/clipsnip-bin -> snippit/snipp
 **Files:**
 - Modify: `.github/workflows/build.yml:157,162,163,186,190,193,195,202,205,206`
 
-- [ ] **Step 1: Update the manual-run artifact name**
+- [x] **Step 1: Update the manual-run artifact name**
 
 Change:
 ```yaml
@@ -461,7 +461,7 @@ to:
           name: snippit-${{ matrix.target }}
 ```
 
-- [ ] **Step 2: Update the AUR job's comment, paths, and pkgnames**
+- [x] **Step 2: Update the AUR job's comment, paths, and pkgnames**
 
 Change the comment above `publish-aur`:
 ```yaml
@@ -524,17 +524,17 @@ to:
           pkgbuild: packaging/aur/snippit-bin/PKGBUILD
 ```
 
-- [ ] **Step 3: Verify YAML is well-formed**
+- [x] **Step 3: Verify YAML is well-formed**
 
 Run: `python3 -c "import yaml, sys; yaml.safe_load(open('.github/workflows/build.yml'))" && echo OK`
 Expected: `OK` (this only checks syntax, not semantics — GitHub will validate the rest on next push).
 
-- [ ] **Step 4: Verify no stragglers**
+- [x] **Step 4: Verify no stragglers**
 
 Run: `grep -in clipsnip .github/workflows/build.yml`
 Expected: no output.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add .github/workflows/build.yml
@@ -547,7 +547,7 @@ git commit -m "ci: update workflow for snippit rename"
 
 **Files:** none (verification only)
 
-- [ ] **Step 1: Full repo-wide grep, excluding intentionally-untouched paths**
+- [x] **Step 1: Full repo-wide grep, excluding intentionally-untouched paths**
 
 Run:
 ```bash
@@ -560,7 +560,7 @@ Expected: no output. (The `docs` exclude covers the historical `docs/superpowers
 
 If anything unexpected shows up, fix it now before moving on — this step exists specifically to catch anything the earlier tasks' file lists missed.
 
-- [ ] **Step 2: Full build + full test pass**
+- [x] **Step 2: Full build + full test pass**
 
 Run: `npm run build`
 Expected: succeeds.
@@ -571,7 +571,7 @@ Expected: all pass.
 Run: `cd src-tauri && cargo test`
 Expected: all pass (this re-runs the real ffmpeg/ffprobe integration tests too — slow, but this is the last gate before calling the rename done).
 
-- [ ] **Step 3: Manual smoke check**
+- [x] **Step 3: Manual smoke check**
 
 Run: `npm run tauri dev`, click through: window title bar reads "Snippit", the in-app header/brand name reads "Snippit", first-run wizard (if triggered, e.g. by clearing the app's config dir) suggests a `.../Snippit` library folder, Settings modal's export-bundle default filename is `snippit-library.zip`. Close the window when done.
 
@@ -583,7 +583,7 @@ Run: `npm run tauri dev`, click through: window title bar reads "Snippit", the i
 
 **Files:** none (remote operation) plus local git config
 
-- [ ] **Step 1: Confirm, then rename**
+- [x] **Step 1: Confirm, then rename**
 
 Ask: "Ready to rename github.com/mikilimj/ClipSnip → mikilimj/Snippit now? GitHub will auto-redirect the old URL for a while, but anything hardcoding the old URL outside this repo (bookmarks, other tools) will need updating separately."
 
@@ -592,7 +592,7 @@ Once confirmed, run:
 gh repo rename Snippit --repo mikilimj/ClipSnip
 ```
 
-- [ ] **Step 2: Update the local git remote**
+- [x] **Step 2: Update the local git remote**
 
 ```bash
 git remote set-url origin git@github.com:mikilimj/Snippit.git
@@ -600,7 +600,7 @@ git remote -v
 ```
 Expected: both `fetch` and `push` show `mikilimj/Snippit.git`.
 
-- [ ] **Step 3: Push the accumulated commits**
+- [x] **Step 3: Push the accumulated commits**
 
 Push the commits from Tasks 1–9 (and this task, if any files changed) to the renamed remote, and confirm the GitHub Actions build badge in the freshly-committed README resolves against the new repo name.
 

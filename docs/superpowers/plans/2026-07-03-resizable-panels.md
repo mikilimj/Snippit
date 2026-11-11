@@ -33,7 +33,7 @@
   is what keeps it unit-testable under Vitest's default `node` environment (no
   `jsdom`/`localStorage` global is installed in this project).
 
-- [ ] **Step 1: Write the failing test file**
+- [x] **Step 1: Write the failing test file**
 
 Create `src/resizable.test.ts`:
 
@@ -75,12 +75,12 @@ describe("parseStoredSize", () => {
 });
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `npx vitest run src/resizable.test.ts`
 Expected: FAIL — `Cannot find module './resizable'` (or similar resolution error), since `src/resizable.ts` doesn't exist yet.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 Create `src/resizable.ts`:
 
@@ -103,12 +103,12 @@ export function parseStoredSize(
 }
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `npx vitest run src/resizable.test.ts`
 Expected: PASS — all 9 assertions green.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/resizable.ts src/resizable.test.ts
@@ -147,7 +147,7 @@ git commit -m "feat: add pure clamp/parse logic for resizable panels"
   or `<div className="resize-handle-y">` drag handle. `onPointerUp` must also be
   passed as the handle's `onPointerCancel` (covers a drag interrupted mid-gesture).
 
-- [ ] **Step 1: Write the hook**
+- [x] **Step 1: Write the hook**
 
 Create `src/useResizable.ts`:
 
@@ -230,12 +230,12 @@ export function useResizable({
 }
 ```
 
-- [ ] **Step 2: Type-check**
+- [x] **Step 2: Type-check**
 
 Run: `npm run build`
 Expected: succeeds with no TypeScript errors (this file isn't wired into `App.tsx` yet, so it's checked in isolation as an unused-but-valid module).
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add src/useResizable.ts
@@ -246,6 +246,11 @@ git commit -m "feat: add useResizable drag hook"
 
 ### Task 3: Sidebar resize (CSS + wiring)
 
+> **Superseded:** the sidebar this task made resizable was removed by the grid-only
+> shell redesign (`docs/design/shell-redesign-brief.md`, phase 3). `useResizable` and
+> the pure resize math from Tasks 1–2 are still in use — for the video player height
+> (`snippit:videoMaxHeightVh` in `src/App.tsx`) — so only this task's wiring is gone.
+
 **Files:**
 - Modify: `src/App.css:11-20` (`.library-panel` block)
 - Modify: `src/App.tsx:5` (imports), `src/App.tsx:51` (state block), `src/App.tsx:652`, `src/App.tsx:846`
@@ -253,7 +258,7 @@ git commit -m "feat: add useResizable drag hook"
 **Interfaces:**
 - Consumes: `useResizable` from `./useResizable` (Task 2).
 
-- [ ] **Step 1: Drop the fixed width from `.library-panel` and add the handle style**
+- [x] **Step 1: Drop the fixed width from `.library-panel` and add the handle style**
 
 In `src/App.css`, the current block (lines 11-20) is:
 
@@ -299,7 +304,7 @@ JS now drives the actual width):
 }
 ```
 
-- [ ] **Step 2: Import the hook in `App.tsx`**
+- [x] **Step 2: Import the hook in `App.tsx`**
 
 In `src/App.tsx`, after the existing local import on line 12:
 
@@ -314,7 +319,7 @@ import { Timeline } from "./Timeline";
 import { useResizable } from "./useResizable";
 ```
 
-- [ ] **Step 3: Call the hook**
+- [x] **Step 3: Call the hook**
 
 In `src/App.tsx`, after line 51:
 
@@ -335,7 +340,7 @@ add:
   });
 ```
 
-- [ ] **Step 4: Bind the width and add the handle**
+- [x] **Step 4: Bind the width and add the handle**
 
 In `src/App.tsx` line 652, change:
 
@@ -368,12 +373,12 @@ sidebar and the editor panel:
       <main className="editor-panel">
 ```
 
-- [ ] **Step 5: Type-check**
+- [x] **Step 5: Type-check**
 
 Run: `npm run build`
 Expected: succeeds with no TypeScript errors.
 
-- [ ] **Step 6: Manual verification**
+- [x] **Step 6: Manual verification**
 
 Run: `npm run tauri dev`
 - Confirm the sidebar renders at 224px as before.
@@ -384,7 +389,7 @@ Run: `npm run tauri dev`
 - Reload the app (or restart `tauri dev`) — the sidebar should reopen at the last
   dragged width (confirms the `localStorage` round-trip).
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/App.css src/App.tsx
@@ -404,7 +409,7 @@ git commit -m "feat: make library sidebar width drag-resizable"
   hook is called a second time in this task with different options — both calls
   coexist in the same component.
 
-- [ ] **Step 1: Drop the fixed max-height from `.video-player` and add the handle style**
+- [x] **Step 1: Drop the fixed max-height from `.video-player` and add the handle style**
 
 In `src/App.css`, the current block (lines 367-375) is:
 
@@ -447,7 +452,7 @@ Replace it with (drops the fixed `max-height`; JS now drives it via inline style
 }
 ```
 
-- [ ] **Step 2: Call the hook a second time**
+- [x] **Step 2: Call the hook a second time**
 
 In `src/App.tsx`, immediately after the `sidebar` hook call added in Task 3 Step 3:
 
@@ -468,7 +473,7 @@ In `src/App.tsx`, immediately after the `sidebar` hook call added in Task 3 Step
   });
 ```
 
-- [ ] **Step 3: Bind the height and add the handle**
+- [x] **Step 3: Bind the height and add the handle**
 
 In `src/App.tsx`, the current `<video>` element (lines 878-891) is:
 
@@ -522,12 +527,12 @@ after it):
             {proxyStatus && (
 ```
 
-- [ ] **Step 4: Type-check**
+- [x] **Step 4: Type-check**
 
 Run: `npm run build`
 Expected: succeeds with no TypeScript errors.
 
-- [ ] **Step 5: Manual verification**
+- [x] **Step 5: Manual verification**
 
 Run: `npm run tauri dev`
 - Open a clip so the video player is visible.
@@ -539,7 +544,7 @@ Run: `npm run tauri dev`
 - Reload the app — the video player should reopen at the last dragged height
   (confirms the `localStorage` round-trip).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/App.css src/App.tsx
@@ -556,7 +561,7 @@ git commit -m "feat: make video player height drag-resizable"
 **Interfaces:**
 - None — documentation only.
 
-- [ ] **Step 1: Remove the two completed to-do items**
+- [x] **Step 1: Remove the two completed to-do items**
 
 In `CLAUDE.md`, the current `# To-Do` section is:
 
@@ -574,7 +579,7 @@ Both items are now done — remove the entire `# To-Do` section (delete those 8 
 including the `# To-Do` heading and the trailing blank line before it, so the file
 ends cleanly after the `## Known constraints` section).
 
-- [ ] **Step 2: Add the new pure-logic module to the architecture doc**
+- [x] **Step 2: Add the new pure-logic module to the architecture doc**
 
 In `CLAUDE.md`, the current line (in the "Frontend layout" bullet list) is:
 
@@ -591,13 +596,13 @@ Change it to:
   co-located `*.test.ts`
 ```
 
-- [ ] **Step 3: Verify**
+- [x] **Step 3: Verify**
 
 Run: `npx vitest run && npm run build`
 Expected: both succeed (this task only touches Markdown, so this just confirms
 nothing else regressed).
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add CLAUDE.md
