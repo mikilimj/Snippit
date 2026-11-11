@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  CACHED_CHUNKS_PER_TRACK,
   CHUNK_SECONDS,
   chunkIndexAt,
   chunkSchedule,
@@ -9,10 +10,10 @@ import {
 } from "./audioChunks";
 
 describe("chunkIndexAt", () => {
-  it("maps media time onto the chunk grid", () => {
+  it("maps media time onto the default (CHUNK_SECONDS) grid", () => {
     expect(chunkIndexAt(0)).toBe(0);
-    expect(chunkIndexAt(19.99)).toBe(0);
-    expect(chunkIndexAt(20)).toBe(1);
+    expect(chunkIndexAt(9.99)).toBe(0);
+    expect(chunkIndexAt(10)).toBe(1);
     expect(chunkIndexAt(45, 20)).toBe(2);
   });
 
@@ -44,49 +45,49 @@ describe("chunkWindow", () => {
 });
 
 describe("chunkSchedule", () => {
-  // Anchor: media 30s pinned to ctx time 100.
-  const media = 30;
+  // Anchor: media 35s pinned to ctx time 100, so 10s chunk 3 covers media 30-40.
+  const media = 35;
   const ctx = 100;
 
   it("schedules a future chunk at its exact context time", () => {
-    // chunk 2 starts at media 40 => ctx 110
-    expect(chunkSchedule(2, media, ctx, 100, 300)).toEqual({
-      when: 110,
+    // chunk 4 starts at media 40 => ctx 105
+    expect(chunkSchedule(4, media, ctx, 100, 300)).toEqual({
+      when: 105,
       offset: 0,
       duration: CHUNK_SECONDS,
     });
   });
 
   it("starts the current chunk immediately with an offset into the buffer", () => {
-    // chunk 1 covers media 20-40; at anchor the playhead is 10s into it
-    expect(chunkSchedule(1, media, ctx, 100, 300)).toEqual({
+    // chunk 3 covers media 30-40; the anchor sits 5s into it
+    expect(chunkSchedule(3, media, ctx, 100, 300)).toEqual({
       when: 100,
-      offset: 10,
-      duration: 10,
+      offset: 5,
+      duration: 5,
     });
   });
 
   it("returns null for chunks entirely in the past", () => {
-    expect(chunkSchedule(0, media, ctx, 100, 300)).toBeNull();
+    expect(chunkSchedule(2, media, ctx, 100, 300)).toBeNull();
   });
 
   it("shortens the final chunk to the real media end", () => {
-    // 50s media: chunk 2 covers 40-50 => 10s long
-    const s = chunkSchedule(2, media, ctx, 100, 50);
-    expect(s).toEqual({ when: 110, offset: 0, duration: 10 });
+    // 45s media: chunk 4 covers 40-45 => 5s long
+    const s = chunkSchedule(4, media, ctx, 100, 45);
+    expect(s).toEqual({ when: 105, offset: 0, duration: 5 });
   });
 
   it("returns null for chunks past the end of the media", () => {
-    expect(chunkSchedule(3, media, ctx, 100, 50)).toBeNull();
+    expect(chunkSchedule(5, media, ctx, 100, 45)).toBeNull();
   });
 
   it("accounts for context time already advanced past the anchor", () => {
-    // 5s after anchoring, chunk 2 (media 40 => ctx 110) is still 5s away
-    const s = chunkSchedule(2, media, ctx, 105, 300);
-    expect(s).toEqual({ when: 110, offset: 0, duration: CHUNK_SECONDS });
-    // 12s after anchoring the chunk started 2s ago: play the remainder now
-    const late = chunkSchedule(2, media, ctx, 112, 300);
-    expect(late).toEqual({ when: 112, offset: 2, duration: CHUNK_SECONDS - 2 });
+    // 2s after anchoring, chunk 4 (media 40 => ctx 105) is still 3s away
+    const s = chunkSchedule(4, media, ctx, 102, 300);
+    expect(s).toEqual({ when: 105, offset: 0, duration: CHUNK_SECONDS });
+    // 12s after anchoring the chunk started 7s ago: play the remainder now
+    const late = chunkSchedule(4, media, ctx, 112, 300);
+    expect(late).toEqual({ when: 112, offset: 7, duration: CHUNK_SECONDS - 7 });
   });
 });
 
@@ -99,5 +100,25 @@ describe("engineMediaTime / needsResync", () => {
     expect(needsResync(35.2, 35.0)).toBe(false); // within tolerance
     expect(needsResync(35.5, 35.0)).toBe(true); // past tolerance
     expect(needsResync(34.5, 35.0)).toBe(true); // drift is symmetric
+  });
+});
+
+// The engine's RAM cost is these two constants multiplied out: every chunk is
+// decoded to a float32 AudioBuffer (48kHz stereo here — the rate the extracted
+// preview tracks carry), and every audible track keeps CACHED_CHUNKS_PER_TRACK
+// of them. These guards exist so a future "let's prefetch more" tweak has to
+// argue with the memory budget, not just with smoothness.
+describe("decoded-PCM budget", () => {
+  const FLOAT32_STEREO_48K_BYTES_PER_SECOND = 48_000 * 2 * 4;
+
+  it("keeps one chunk small enough to fetch, decode and drop cheaply", () => {
+    const chunkBytes = CHUNK_SECONDS * FLOAT32_STEREO_48K_BYTES_PER_SECOND;
+    expect(chunkBytes).toBeLessThanOrEqual(4 * 1024 * 1024);
+  });
+
+  it("bounds one track's resident PCM to under 8MB", () => {
+    const trackBytes =
+      CACHED_CHUNKS_PER_TRACK * CHUNK_SECONDS * FLOAT32_STEREO_48K_BYTES_PER_SECOND;
+    expect(trackBytes).toBeLessThanOrEqual(8 * 1024 * 1024);
   });
 });

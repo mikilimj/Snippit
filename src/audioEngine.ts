@@ -8,6 +8,7 @@
 
 import { audioChunk } from "./api";
 import {
+  CACHED_CHUNKS_PER_TRACK,
   CHUNK_SECONDS,
   chunkIndexAt,
   chunkSchedule,
@@ -15,9 +16,6 @@ import {
   engineMediaTime,
   needsResync,
 } from "./audioChunks";
-
-/** Decoded chunks kept per track: current, neighbour, and one for history. */
-const CACHE_CHUNKS_PER_TRACK = 3;
 
 export class ChunkedAudioEngine {
   private readonly ctx: AudioContext;
@@ -30,6 +28,12 @@ export class ChunkedAudioEngine {
   private buffers = new Map<string, AudioBuffer>();
   private inflight = new Map<string, Promise<AudioBuffer | null>>();
   private scheduled = new Map<string, AudioBufferSourceNode>();
+  /**
+   * Tracks with a non-zero gain. A muted (or disabled) track is never fetched,
+   * decoded or cached — on a multi-track recording only the audible ones cost
+   * RAM — and its sources are stopped the moment it goes quiet.
+   */
+  private active: boolean[];
 
   private anchorMedia = 0;
   private anchorCtx = 0;
@@ -53,12 +57,30 @@ export class ChunkedAudioEngine {
       g.connect(this.master);
       return g;
     });
+    this.active = initialGains.map(g => g > 0);
   }
 
-  /** Live per-track volume (0 when the track is muted), same as the old sliders. */
+  /**
+   * Live per-track volume (0 when the track is muted), same as the old sliders.
+   * Crossing zero also gates the fetching: a track that comes back gets its
+   * current chunk scheduled at the right offset, a track that goes quiet drops
+   * its buffers and sources immediately instead of at the next eviction.
+   */
   setTrackGain(i: number, value: number) {
     const g = this.gains[i];
     if (g) g.gain.value = value;
+    if (i >= this.active.length) return;
+    const on = value > 0;
+    if (on === this.active[i]) return;
+    this.active[i] = on;
+    if (on) {
+      // Start this track where the playhead is. ensureWindow is idempotent, so
+      // the tracks that were already playing are left alone.
+      const at = this.currentMediaTime();
+      if (this.playing && at !== null) this.ensureWindow(at);
+    } else {
+      this.releaseTrack(i);
+    }
   }
 
   /** Master preview volume (0..1). Export ignores it — it mixes the track configs. */
@@ -95,8 +117,18 @@ export class ChunkedAudioEngine {
    */
   pause() {
     if (this.disposed) return;
+    // Read the position off the anchor pair before the engine clock stops being
+    // meaningful: it decides which single chunk survives the prune below.
+    const at = engineMediaTime(this.ctx.currentTime, this.anchorMedia, this.anchorCtx);
     this.playing = false;
     this.stopSources();
+    // A paused clip holds one chunk per audible track (~3.7MB) instead of the
+    // lookahead window, so an editor left open on a parked clip doesn't sit on
+    // decoded PCM. That one chunk is what makes resuming instant.
+    const cur = chunkIndexAt(at);
+    for (let track = 0; track < this.trackPaths.length; track++) {
+      if (this.active[track]) this.pruneTrack(track, cur, 1);
+    }
   }
 
   seek(at: number) {
@@ -152,6 +184,7 @@ export class ChunkedAudioEngine {
   private ensureWindow(t: number) {
     for (const idx of chunkWindow(t, this.totalDur)) {
       for (let track = 0; track < this.trackPaths.length; track++) {
+        if (!this.active[track]) continue;
         void this.scheduleChunk(track, idx);
       }
     }
@@ -159,11 +192,19 @@ export class ChunkedAudioEngine {
 
   private async scheduleChunk(track: number, idx: number) {
     const key = `${track}:${idx}`;
-    if (this.scheduled.has(key)) return;
+    if (!this.active[track] || this.scheduled.has(key)) return;
     const epoch = this.epoch;
     const buf = await this.getBuffer(track, idx);
-    // The world may have moved on while the chunk was fetched/decoded.
-    if (!buf || this.disposed || !this.playing || epoch !== this.epoch || this.scheduled.has(key)) {
+    // The world may have moved on while the chunk was fetched/decoded — and the
+    // track may have been muted meanwhile, which voids the whole fetch.
+    if (
+      !buf ||
+      this.disposed ||
+      !this.playing ||
+      !this.active[track] ||
+      epoch !== this.epoch ||
+      this.scheduled.has(key)
+    ) {
       return;
     }
     const spec = chunkSchedule(
@@ -191,11 +232,13 @@ export class ChunkedAudioEngine {
     if (cached) return Promise.resolve(cached);
     const pending = this.inflight.get(key);
     if (pending) return pending;
+    // Silent track: don't spawn ffmpeg for audio nobody can hear.
+    if (!this.active[track]) return Promise.resolve(null);
 
     const p = audioChunk(this.trackPaths[track], idx * CHUNK_SECONDS, CHUNK_SECONDS)
       .then(bytes => this.ctx.decodeAudioData(bytes))
       .then(buf => {
-        if (this.disposed) return null;
+        if (this.disposed || !this.active[track]) return null;
         this.buffers.set(key, buf);
         this.evictFarChunks(track);
         return buf;
@@ -213,19 +256,46 @@ export class ChunkedAudioEngine {
 
   /** Drop cached chunks far from the playhead so memory stays bounded. */
   private evictFarChunks(track: number) {
+    // While paused the anchor clock keeps running ahead of the real position, so
+    // an eviction here would throw away the chunk pause() deliberately kept.
+    if (!this.playing) return;
     const cur = chunkIndexAt(
       engineMediaTime(this.ctx.currentTime, this.anchorMedia, this.anchorCtx)
     );
+    this.pruneTrack(track, cur, CACHED_CHUNKS_PER_TRACK);
+  }
+
+  /** Keep the `keep` cached chunks closest to `center` for one track. */
+  private pruneTrack(track: number, center: number, keep: number) {
     const prefix = `${track}:`;
     const owned = [...this.buffers.keys()].filter(k => k.startsWith(prefix));
-    if (owned.length <= CACHE_CHUNKS_PER_TRACK) return;
+    if (owned.length <= keep) return;
     owned
       .sort(
         (a, b) =>
-          Math.abs(Number(b.slice(prefix.length)) - cur) -
-          Math.abs(Number(a.slice(prefix.length)) - cur)
+          Math.abs(Number(b.slice(prefix.length)) - center) -
+          Math.abs(Number(a.slice(prefix.length)) - center)
       )
-      .slice(0, owned.length - CACHE_CHUNKS_PER_TRACK)
+      .slice(0, owned.length - keep)
       .forEach(k => this.buffers.delete(k));
+  }
+
+  /** Stop a track's sources and forget its PCM (muted or disabled mid-playback). */
+  private releaseTrack(track: number) {
+    const prefix = `${track}:`;
+    this.scheduled.forEach((src, key) => {
+      if (!key.startsWith(prefix)) return;
+      src.onended = null;
+      try {
+        src.stop();
+      } catch {
+        // never started or already stopped — nothing to do
+      }
+      src.disconnect();
+      this.scheduled.delete(key);
+    });
+    for (const key of [...this.buffers.keys()]) {
+      if (key.startsWith(prefix)) this.buffers.delete(key);
+    }
   }
 }

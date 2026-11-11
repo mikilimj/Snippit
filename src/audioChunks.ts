@@ -1,15 +1,33 @@
 //! Pure scheduling math for the chunked preview-audio engine. Track audio is
-//! decoded by ffmpeg into ~20s PCM chunks and scheduled as AudioBufferSourceNodes
+//! decoded by ffmpeg into short PCM chunks and scheduled as AudioBufferSourceNodes
 //! on one shared AudioContext (never per-track <audio> elements — each media
 //! element registers its own audio stream with the OS mixer, and the whole point
 //! is that the app shows up as a single stream). These helpers map between the
 //! media clock (video.currentTime) and the AudioContext clock.
+//!
+//! Chunk length is the engine's memory unit: every fetch becomes a float32
+//! AudioBuffer, and the buffers are what a playing clip actually costs on top of
+//! the video decode. Keep the two constants below small and the per-track
+//! footprint stays in the single-digit MB range.
 
-/** Length of one decoded PCM chunk. ~20s stereo decodes to ~7.7MB of float32. */
-export const CHUNK_SECONDS = 20;
+/**
+ * Length of one decoded PCM chunk. Measured on a real track (48kHz stereo):
+ * a 10s chunk is 1.83MB as the s16 WAV that crosses IPC and ~3.7MB once the
+ * WebView decodes it to float32.
+ */
+export const CHUNK_SECONDS = 10;
 
 /** Schedule the next chunk once the playhead is this close to its start. */
 export const SCHEDULE_LOOKAHEAD_SECONDS = 5;
+
+/**
+ * Decoded chunks held per track: the playing chunk plus its lookahead
+ * neighbour. `chunkWindow` never asks for more than two at a time, and each
+ * track is cached independently, so this bounds memory PER TRACK (2 × ~3.7MB at
+ * 10s/48kHz) — not for the clip as a whole. Tracks are only ever fetched while
+ * they are audible, so a muted track costs nothing.
+ */
+export const CACHED_CHUNKS_PER_TRACK = 2;
 
 /**
  * Engine-vs-video drift beyond which everything is torn down and re-anchored.
