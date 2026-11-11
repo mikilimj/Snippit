@@ -45,15 +45,17 @@ exactly one audio stream with the OS mixer.** Media elements are never used for
 audio: on WebKitGTK every media element keeps its own (muted) system audio sink
 alive even when captured into Web Audio, so element-based playback showed one OS
 stream per track. Instead, each audio stream in the source is extracted once
-(cached by a hash of the source path) to a temp `.m4a` via `prepare_audio_tracks`,
-and `audioEngine.ts` pulls ~20s PCM windows from it through the `audio_chunk`
-command (ffmpeg → WAV bytes over IPC), decodes them with `decodeAudioData`, and
-schedules `AudioBufferSourceNode`s (per-track `GainNode` → destination) against
-the video clock. Each track's mute checkbox / 0–200% volume slider drives its
-`GainNode` directly. The `<video>` plays the original (with its own audio) for
-instant startup; once the engine takes over it is muted, and then swapped to a
-cached video-only remux (`prepare_video_only`, stream copy) so its pipeline stops
-registering an OS audio stream entirely.
+(cached by a hash of the source path + mtime) to a temp `.m4a` via
+`prepare_audio_tracks`, and `audioEngine.ts` pulls ~10s PCM windows from it
+through the `audio_chunk` command (ffmpeg → WAV bytes over IPC), decodes them
+with `decodeAudioData`, and schedules `AudioBufferSourceNode`s (per-track
+`GainNode` → destination) against the video clock — at most two decoded chunks
+per track, and none for a muted track, which is what keeps preview audio's RAM
+in the single-digit MB per track. Each track's mute checkbox / 0–200% volume
+slider drives its `GainNode` directly. The `<video>` plays the original (with its
+own audio) for instant startup; once the engine takes over it is muted, and then
+swapped to a cached video-only remux (`prepare_video_only`, stream copy) so its
+pipeline stops registering an OS audio stream entirely.
 
 **Export mirrors what was actually heard in preview** (`export.rs`): a single enabled
 track at 100% volume takes the fast lossless path (`-c copy`, explicit stream maps,
@@ -73,6 +75,9 @@ into one output stream (video stream-copied, audio re-encoded to AAC).
 - `relocate.rs` — crash-safe move of a watched folder to a new disk (same-volume
   rename vs. cross-volume copy-per-file fanout)
 - `bundle.rs` — portable library export/import as a zip bundle (re-roots clip paths)
+- `cache.rs` — temp-dir hygiene: startup sweep of stale `snippit-*` artifacts plus a
+  clean-exit delete of the ones the running session created (`/tmp` was growing a
+  copy of every previewed clip's extracted audio tracks)
 - `setup.rs` — first-run setup/config
 
 **Frontend layout** (`src/`):
