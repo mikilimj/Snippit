@@ -8,6 +8,7 @@ pub mod relocate;
 pub mod watcher;
 pub mod remote;
 pub mod sync;
+mod cache;
 mod media_server;
 
 use export::{
@@ -186,8 +187,8 @@ async fn probe_clip(app: tauri::AppHandle, path: String) -> Result<ClipMeta, Str
     probe_path(&app, &path).await
 }
 
-/// Extract individual audio tracks to temp M4A files so the frontend can play
-/// them as separate <audio> elements for per-track live volume control.
+/// Extract individual audio tracks to temp M4A files so the frontend can decode
+/// them in ~10s chunks for per-track live volume control.
 /// Returns one absolute path per requested stream index, in the same order.
 /// Reuses cached temp files if the same clip was prepared before.
 #[tauri::command]
@@ -199,6 +200,9 @@ async fn prepare_audio_tracks(
     let tmp_dir = std::env::temp_dir();
     let mut hasher = DefaultHasher::new();
     path.hash(&mut hasher);
+    // The mtime belongs in the key: a file re-encoded in place at the same path
+    // must not reuse the previous extraction, or preview audio goes stale.
+    file_mtime_unix(Path::new(&path)).hash(&mut hasher);
     let path_hash = hasher.finish();
 
     let mut results = Vec::new();
@@ -231,6 +235,13 @@ async fn prepare_audio_tracks(
 
             if !result.status.success() {
                 return Err(String::from_utf8_lossy(&result.stderr).to_string());
+            }
+            // Remember what this session created so a clean exit can delete it;
+            // anything a crash leaves behind is handled by the startup sweep.
+            if let Some(artifacts) = app.try_state::<TempArtifacts>() {
+                if let Ok(mut set) = artifacts.0.lock() {
+                    set.insert(out_path.clone());
+                }
             }
         }
 
@@ -1068,6 +1079,9 @@ fn complete_setup(
 struct WatchStarted(AtomicBool);
 /// Paths currently being ingested, so duplicate filesystem events are dropped.
 struct InFlight(Arc<Mutex<HashSet<PathBuf>>>);
+/// Temp artifacts this session created (extracted preview-audio tracks), deleted
+/// on a clean exit. Leftovers from a crash are swept at startup — see cache.rs.
+struct TempArtifacts(Arc<Mutex<HashSet<PathBuf>>>);
 
 /// Timestamp (seconds) to grab the thumbnail frame from — a little into the clip,
 /// but never past the end of very short clips.
@@ -2242,6 +2256,13 @@ pub fn run() {
             app.manage(MediaPort(port));
             app.manage(WatchStarted(AtomicBool::new(false)));
             app.manage(InFlight(Arc::new(Mutex::new(HashSet::new()))));
+            app.manage(TempArtifacts(Arc::new(Mutex::new(HashSet::new()))));
+            // Sweep leftovers from earlier runs off the UI thread. Close-to-tray
+            // means most sessions never reach a clean exit, so without this /tmp
+            // would keep a copy of every previewed clip's audio tracks forever.
+            std::thread::spawn(|| {
+                cache::sweep_temp_dir();
+            });
             app.manage(ExportJob::default());
             app.manage(RelocateJob::default());
             app.manage(BundleJob::default());
@@ -2355,6 +2376,22 @@ pub fn run() {
             get_sync_settings,
             set_sync_settings
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|handle, event| {
+            // Clean quit: drop the preview-audio tracks this session extracted so
+            // /tmp doesn't keep them. Crash leftovers are swept on the next launch
+            // (cache.rs), and the sweep here also mops up chunk WAVs.
+            if let tauri::RunEvent::Exit = event {
+                if let Some(artifacts) = handle.try_state::<TempArtifacts>() {
+                    let paths: Vec<PathBuf> = artifacts
+                        .0
+                        .lock()
+                        .map(|set| set.iter().cloned().collect())
+                        .unwrap_or_default();
+                    cache::remove_paths(&paths);
+                }
+                cache::sweep_temp_dir();
+            }
+        });
 }
