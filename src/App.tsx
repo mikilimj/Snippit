@@ -110,6 +110,9 @@ function App() {
   const restoreAfterSwapRef = useRef<{ time: number; paused: boolean } | null>(null);
   // A video-only remux that failed to play is never retried for this clip.
   const videoOnlyFailedRef = useRef(false);
+  // Set while the video-only swap pauses the outgoing <video> on purpose, so the
+  // ordinary pause handler doesn't also park the audio engine.
+  const swappingRef = useRef(false);
 
   // Keep the ref in sync so Web Audio effects can read current config
   useEffect(() => {
@@ -316,6 +319,11 @@ function App() {
   // app's one OS audio stream survives pause/play cycles (suspending it makes
   // WebKitGTK register a fresh sink-input on every resume).
   function onVideoPause() {
+    // The video-only swap pauses the outgoing element deliberately (see the swap
+    // effect) and the fresh element resumes where playback left off. Neither the
+    // transport state nor the engine should react to that — reacting to it would
+    // punch an audible hole in a transition that is supposed to be seamless.
+    if (swappingRef.current) return;
     setPlaying(false);
     engineRef.current?.pause();
   }
@@ -356,6 +364,7 @@ function App() {
   // playing through the swap, its clock — not the pre-swap snapshot — is where
   // the audio is now, so resuming there keeps the transition seamless.
   function onVideoLoadedMetadata() {
+    swappingRef.current = false;
     const r = restoreAfterSwapRef.current;
     const v = videoRef.current;
     if (!r || !v) return;
@@ -375,6 +384,7 @@ function App() {
     // played from the previous source. Drop back to it and don't retry.
     if (videoOnlyPath) {
       videoOnlyFailedRef.current = true;
+      swappingRef.current = false;
       // If the remux died before loadedmetadata, the pre-swap snapshot is still
       // pending — keep it rather than the dead element's zeroed clock.
       if (!restoreAfterSwapRef.current) {
@@ -444,6 +454,13 @@ function App() {
     if (!preparedVideoOnly || !audioReady || videoOnlyFailedRef.current) return;
     const v = videoRef.current;
     restoreAfterSwapRef.current = v ? { time: v.currentTime, paused: v.paused } : null;
+    // Park the outgoing element before the remount: a paused media element stops
+    // decoding and buffering but keeps its last frame on screen, so the swap never
+    // has two decode pipelines (and two sets of decoded frames) alive at once.
+    if (v && !v.paused) {
+      swappingRef.current = true;
+      v.pause();
+    }
     setVideoOnlyPath(preparedVideoOnly);
   }, [preparedVideoOnly, audioReady]);
 
@@ -690,6 +707,7 @@ function App() {
     setVideoOnlyPath(null);
     setPreparedVideoOnly(null);
     videoOnlyFailedRef.current = false;
+    swappingRef.current = false;
     restoreAfterSwapRef.current = null;
     teardownAudio();
   }
@@ -1119,12 +1137,15 @@ function App() {
                 className={`player-shell${playerExpanded ? " player-shell-expanded" : ""}`}
               >
                 {/* Video: original first, proxy fallback (§4.4), then the video-only
-                    remux once the audio engine has taken over; muted in the interim */}
+                    remux once the audio engine has taken over; muted in the interim.
+                    `preload="metadata"` keeps a parked clip from buffering (and
+                    decoding) ahead of the playhead. */}
                 <video
                   ref={videoRef}
                   key={previewPath(path, proxyPath, videoOnlyPath)}
                   src={mediaPort ? `http://127.0.0.1:${mediaPort}/file?path=${encodeURIComponent(previewPath(path, proxyPath, videoOnlyPath))}` : undefined}
                   muted={audioReady || masterMuted}
+                  preload="metadata"
                   className="video-player"
                   draggable={false}
                   style={{ "--video-max-height": `${videoHeight.size}vh` } as React.CSSProperties}
